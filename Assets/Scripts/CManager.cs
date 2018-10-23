@@ -9,6 +9,7 @@ using UnityEngine.UI;
 public class CManager : MonoBehaviour
 {
     private static CManager Instance = null;
+    private bool m_bInitialed = false;
 #if UNITY_EDITOR
     public static readonly string _outfolder = "/";
 #else
@@ -43,11 +44,18 @@ public class CManager : MonoBehaviour
         //4096 x 4096 x 16 - 128^4 sites
         Debug.Log(SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.RGInt));
         Instance = this;
+
+
     }
 	
 	void Update ()
     {
-		
+	    if (!m_bInitialed)
+	    {
+            G4096_4D.InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage);
+            OnStopSimulation();
+	        m_bInitialed = true;
+	    }
 	}
 
     #region Calculator
@@ -75,11 +83,15 @@ public class CManager : MonoBehaviour
     private void OnStartSimulation()
     {
         OnStartSimulationGroupTable();
+        OnStartSimConfig();
+        OnStartSimSim();
     }
 
     private void OnStopSimulation()
     {
         OnStopSimulationGroupTable();
+        OnStopSimConfig();
+        OnStopSimSim();
     }
 
     #region Global
@@ -118,7 +130,8 @@ public class CManager : MonoBehaviour
 
         if (null != m_pGroupTable)
         {
-            GroupTableSaveBt.interactable = true;
+            m_bGroupTableSet = true;
+            OnStopSimulation();
         }
     }
 
@@ -163,12 +176,14 @@ public class CManager : MonoBehaviour
 
     private void OnStartSimulationGroupTable()
     {
-
+        GroupTableLoadBt.interactable = false;
+        GroupTableSaveBt.interactable = false;
     }
 
     private void OnStopSimulationGroupTable()
     {
-
+        GroupTableLoadBt.interactable = m_bSiteNumberSet;
+        GroupTableSaveBt.interactable = (null != m_pGroupTable);
     }
 
     #endregion
@@ -192,6 +207,8 @@ public class CManager : MonoBehaviour
             {
                 G4096_4D.SetSiteNumber(new [] { m_iSizes[2 * (int)m_eCalcType + 1][i] , m_iSizes[2 * (int)m_eCalcType][i], m_iSizes[2 * (int)m_eCalcType][i] * m_iSizes[2 * (int)m_eCalcType][i] });
                 ConfigTableTitle.text = "Configuration file: White";
+                m_bSiteNumberSet = true;
+                OnStopSimulation();
                 return;
             }
         }
@@ -206,13 +223,96 @@ public class CManager : MonoBehaviour
 
     public void OnBtConfigWhite()
     {
-
+        G4096_4D.SetWhiteConfigure();
     }
 
     public void OnBtConfigSave()
     {
 
     }
+
+    private void OnStartSimConfig()
+    {
+        SiteBt.interactable = false;
+        ConfigInitalBt.interactable = false;
+        ConfigLoadBt.interactable = false;
+        ConfigSaveBt.interactable = false;
+        SiteNumberInput.interactable = false;
+    }
+
+    private void OnStopSimConfig()
+    {
+        SiteBt.interactable = true;
+        SiteNumberInput.interactable = true;
+        ConfigInitalBt.interactable = m_bSiteNumberSet;
+        ConfigLoadBt.interactable = m_bSiteNumberSet;
+        ConfigSaveBt.interactable = m_bSiteNumberSet;
+    }
+
+    #endregion
+
+    #region Simulation
+
+    public Text SimTxtStep;
+    public Text SimTxtEnergy;
+    public Text SimTxtStartButton;
+    public Button SimBtStart;
+    public InputField SimInputBetaX;
+    public InputField SimInputBetaT;
+    public InputField SimInputIteration;
+    public InputField SimInputEnergyStep;
+
+    public void OnBtStartButton()
+    {
+        if (G4096_4D.IsSimulating())
+        {
+            G4096_4D.PauseSimulate();
+            OnStopSimulation();
+            return;
+        }
+
+        int iItera, iEnergyStep;
+        float fBetaX, fBetaT;
+
+        int.TryParse(SimInputIteration.text, out iItera);
+        int.TryParse(SimInputEnergyStep.text, out iEnergyStep);
+        float.TryParse(SimInputBetaX.text, out fBetaX);
+        float.TryParse(SimInputBetaT.text, out fBetaT);
+
+        if (iItera < 1)
+        {
+            ShowMessage("Iteration must be >= 1!");
+            return;
+        }
+
+        OnStartSimulation();
+        G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep);
+    }
+
+    private void OnStartSimSim()
+    {
+        SimInputBetaX.interactable = false;
+        SimInputBetaT.interactable = false;
+        SimInputIteration.interactable = false;
+        SimInputEnergyStep.interactable = false;
+        SimBtStart.interactable = true;
+    }
+
+    private void OnStopSimSim()
+    {
+        SimInputBetaX.interactable = true;
+        SimInputBetaT.interactable = true;
+        SimInputIteration.interactable = true;
+        SimInputEnergyStep.interactable = true;
+        SimBtStart.interactable = m_bSiteNumberSet && m_bGroupTableSet;
+    }
+
+    #endregion
+
+    #region Show
+
+    public RawImage ShowImage;
+    public Material ShowMat;
 
     #endregion
 

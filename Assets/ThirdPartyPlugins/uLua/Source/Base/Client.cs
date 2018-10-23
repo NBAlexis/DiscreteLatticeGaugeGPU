@@ -111,7 +111,9 @@ public class Client : MonoBehaviour
                 GameObject go = new GameObject();
                 go.AddComponent<SkinnedMeshRenderer>();
                 SkinnedMeshRenderer sm = go.GetComponent<SkinnedMeshRenderer>();
+#pragma warning disable 618
                 sm.castShadows = false;
+#pragma warning restore 618
                 sm.receiveShadows = false;
             }
 

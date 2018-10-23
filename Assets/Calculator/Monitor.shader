@@ -1,12 +1,8 @@
 // Upgrade NOTE: replaced 'mul(UNITY_MATRIX_MVP,*)' with 'UnityObjectToClipPos(*)'
 
-Shader "Z2Gauge/GetXYZ" {
+Shader "DiscreteLatticeGauge/Monitor" {
 	Properties {
-		_MainTex    ("Magnetic momentum", 2D) = "white" {}
-
-        _Nx("Nx", 2D) = "white" {}
-        _Ny("Ny", 2D) = "white" {}
-        _Nz("Nz", 2D) = "white" {}
+		_MainTex    ("Configuration (ARGB32)", 2D) = "white" {}
 	}
 
 	SubShader {
@@ -32,9 +28,6 @@ Shader "Z2Gauge/GetXYZ" {
 
 	    float4 _MainTex_ST;
         uniform sampler2D _MainTex;
-        sampler2D_float _Nx;
-        sampler2D_float _Ny;
-        sampler2D_float _Nz;
 
 	    struct v2f {
 		    float4 pos : SV_POSITION;
@@ -53,7 +46,7 @@ Shader "Z2Gauge/GetXYZ" {
 
         float4 frag(v2f i) : COLOR
         {
-            return 0.5f * float4(tex2D(_Nx, i.uv).r, tex2D(_Ny, i.uv).r, tex2D(_Nz, i.uv).r, 1.0f) + 0.5f;
+            return tex2D(_MainTex, i.uv);
         }
 
 	    ENDCG

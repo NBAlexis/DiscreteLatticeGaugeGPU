@@ -353,7 +353,7 @@ public static class LuaBinding
         });
 
         HashSet<Type> set = beAutoGen ? ToLuaExport.eventSet : GetCustomDelegateTypes();                
-        List<Type> typeList = new List<Type>();
+        //List<Type> typeList = new List<Type>();
 
         foreach (Type t in set)
         {
@@ -409,7 +409,9 @@ public static class LuaBinding
 
     static void BuildLuaBundle(string dir)
     {
+#pragma warning disable 618
         BuildAssetBundleOptions options = BuildAssetBundleOptions.CollectDependencies | BuildAssetBundleOptions.CompleteAssets | BuildAssetBundleOptions.DeterministicAssetBundle;
+#pragma warning restore 618
 
         string[] files = Directory.GetFiles("Assets/Lua/Out/" + dir, "*.lua.bytes");
         List<Object> list = new List<Object>();
@@ -427,7 +429,9 @@ public static class LuaBinding
         if (files.Length > 0)
         {            
             string output = string.Format("{0}/Bundle/" + bundleName, Application.dataPath);
+#pragma warning disable 618
             BuildPipeline.BuildAssetBundle(null, list.ToArray(), output, options, EditorUserBuildSettings.activeBuildTarget);
+#pragma warning restore 618
             string output1 = string.Format("{0}/{1}/" + bundleName, Application.persistentDataPath, GetOS());
             File.Delete(output1);
             File.Copy(output, output1);

@@ -15,7 +15,7 @@ inline int GetGvalueG4096_4D(RWTexture2D<int2> conf, uint2 site, uint dir)
     {
         return conf[site].r & 4095;
     }
-    if (2 == dir)
+    else if (2 == dir)
     {
         return conf[site].g >> 12;
     }
@@ -82,4 +82,38 @@ inline uint3 GetBackwardPlaquette(uint4 fs, uint4 bs, uint plaqutte, uint boundD
     uint gc2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, iSiteShift, mask2), boundDir);
     uint gd2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, iSiteShift, mask2), plaqutte);
     return uint3(gc2, gb2, iM + iN - 2 - gd2);
+}
+
+//-------------------------------------
+//Get Plaquette
+//-------------------------------------
+inline float2 CalcEnergy(uint plaqutte, uint2 oldA, uint2 newA, uint3 plaq, RWTexture2D<int> mt, RWTexture2D<float> etable)
+{
+    uint resultGIndexOld = ((plaqutte & 1) == 1) ?
+          mt[uint2(mt[uint2(oldA.x, plaq.x)], mt[uint2(plaq.y, plaq.z)])]
+        : mt[uint2(mt[uint2(plaq.x, plaq.y)], mt[uint2(oldA.y, plaq.z)])];
+
+    uint resultGIndexNew = ((plaqutte & 1) == 1) ?
+          mt[uint2(mt[uint2(newA.x, plaq.x)], mt[uint2(plaq.y, plaq.z)])]
+        : mt[uint2(mt[uint2(plaq.x, plaq.y)], mt[uint2(newA.y, plaq.z)])];
+
+    return float2(etable[uint2(resultGIndexOld, 0)], etable[uint2(resultGIndexNew, 0)]);
+}
+
+//-------------------------------------
+//Compare and exchange energy
+//-------------------------------------
+inline uint2 Exchange(uint2 oldA, uint2 newA, float2 energy2, uint iRandom, uint randomMaskY, RWTexture2D<float> rtable)
+{
+    if (energy2.x > energy2.y)
+    {
+        return newA;
+    }
+
+    float fRandom = rtable[uint2(iRandom >> 11, iRandom & randomMaskY)];
+    if (fRandom < exp(energy2.x - energy2.y))
+    {
+        return newA;
+    }
+    return oldA;
 }
