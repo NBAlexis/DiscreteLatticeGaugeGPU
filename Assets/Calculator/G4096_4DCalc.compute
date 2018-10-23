@@ -1,0 +1,237 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+
+//===========================================================================
+// Data
+//===========================================================================
+RWStructuredBuffer<uint> IntDataBuffer;
+RWStructuredBuffer<float> FloatDataBuffer;
+
+//=========================
+//RInt textures
+RWTexture2D<int2> Configuration;
+
+//m+n-1 x m+n-1
+RWTexture2D<int> MT;
+//gx1
+RWTexture2D<int> IG;
+
+//=========================
+//RFloat textures
+
+//m x 1
+RWTexture2D<float> EI;
+
+//2048 x 2048
+RWTexture2D<float> Random;
+
+//=========================
+//Values, Note, iM + iN - 1 < 4096
+uint iM;
+uint iN;
+uint iIG;
+uint iSiteNumber;
+uint iSiteShift;
+uint iIteration;
+uint iRandom;
+float fBetaX;
+float fBetaT;
+
+//Useful Constants
+uint4 fs;
+uint4 bs;
+uint LMask;
+uint mask1;
+uint mask2;
+uint randomMask;
+uint randomMaskY;
+
+#include "CommonFunction.cginc"
+
+//===========================================================================
+// Data Input Output Kernel
+//===========================================================================
+
+#pragma kernel SetGroupTables
+
+[numthreads(4, 4, 1)]
+void SetGroupTables(uint3 id : SV_DispatchThreadID)
+{
+    MT[id.xy] = (id.x < iM + iN - 1 && id.y < iM + iN - 1) ? IntDataBuffer[id.x * (iM + iN - 1) + id.y] : -1;
+    if (1 == id.y && id.x < iIG)
+    {
+        IG[id.xy] = IntDataBuffer[(iM + iN - 1) * (iM + iN - 1) + id.x];
+    }
+
+    if (1 == id.y && id.x < iM)
+    {
+        EI[id.xy] = FloatDataBuffer[id.x];
+    }
+}
+
+#pragma kernel SetConfigurationByInput
+
+[numthreads(4, 4, 1)]
+void SetConfigurationByInput(uint3 id : SV_DispatchThreadID)
+{
+    Configuration[id.xy] = int2(IntDataBuffer[((iSiteNumber * iSiteNumber) * id.x + id.y) * 2], IntDataBuffer[((iSiteNumber * iSiteNumber) * id.x + id.y) * 2 + 1]);
+}
+
+#pragma kernel ReadConfiguration
+
+[numthreads(4, 4, 1)]
+void ReadConfiguration(uint3 id : SV_DispatchThreadID)
+{
+    IntDataBuffer[2 * ((iSiteNumber * iSiteNumber) * id.x + id.y)] = Configuration[id.xy].r;
+    IntDataBuffer[2 * ((iSiteNumber * iSiteNumber) * id.x + id.y) + 1] = Configuration[id.xy].g;
+}
+
+#pragma kernel SetRandom
+
+[numthreads(32, 32, 1)]
+void SetRandom(uint3 id : SV_DispatchThreadID)
+{
+    Random[id.xy] = FloatDataBuffer[id.x * 2048 + id.y];
+}
+
+#pragma kernel InitialWhiteConfiguration
+
+[numthreads(4, 4, 1)]
+void InitialWhiteConfiguration(uint3 id : SV_DispatchThreadID)
+{
+    Configuration[id.xy] = int2(0, 0);
+}
+
+#pragma kernel GetSmallData
+
+[numthreads(1, 1, 1)]
+void GetSmallData(uint3 id : SV_DispatchThreadID)
+{
+    IntDataBuffer[0] = iM;
+    IntDataBuffer[1] = iN;
+    IntDataBuffer[2] = iIG;
+    IntDataBuffer[3] = iSiteNumber;
+    IntDataBuffer[4] = iIteration;
+}
+
+#pragma kernel GenerateConstants
+[numthreads(1, 1, 1)]
+void GenerateConstants(uint3 id : SV_DispatchThreadID)
+{
+    iSiteNumber = 1 << iSiteShift;
+
+    fs = int4(1 << (3 * (iSiteShift + 1)),
+              1 << (2 * (iSiteShift + 1)),
+              1 << (1 * (iSiteShift + 1)),
+              1);
+    bs = int4(3 << (3 * (iSiteShift + 1)),
+              3 << (2 * (iSiteShift + 1)),
+              3 << (1 * (iSiteShift + 1)),
+              3);
+
+    mask1 = (iSiteNumber - 1) << iSiteShift;
+    mask2 = iSiteNumber - 1;
+
+    iRandom = 0;
+    randomMask = (1 << 22) - 1;
+    randomMaskY = (1 << 11) - 1;
+}
+
+//===========================================================================
+// Simulate Kernel
+//===========================================================================
+
+#pragma kernel Calculate64
+
+[numthreads(4, 4, 4)]
+void Calculate64(uint3 id : SV_DispatchThreadID)
+{
+    uint boundDir = id.z;
+    float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+    //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
+    //max is 2^(4 x 7) - 1=2^28 - 1
+    uint L = (id.x & mask1) << (3 * (iSiteShift + 1))
+           + (id.x & mask2) << (2 * (iSiteShift + 1))
+           + (id.y & mask1) << (1 * (iSiteShift + 1))
+           + (id.y & mask2);
+
+    uint3 plaq[6];
+    uint icount = 0;
+
+    for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+    {
+        if (plaqutte != boundDir)
+        {
+            plaq[icount] = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+            ++icount;
+
+            plaq[icount] = GetBackwardPlaquette(fs, bs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+            ++icount;
+        }
+    }
+
+    uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+    uint oldAInv = iM + iN - 2 - oldA;
+
+    for (uint ite = 0; ite < iIteration; ++ite)
+    {
+        uint iGIndexbOld = 0;
+        uint iGIndexbNew = 0;
+        float fEISumOld = 0.0f;
+        float fEISumNew = 0.0f;
+
+        iRandom = (iRandom + 1) & randomMask;
+        float fRandom = Random[uint2(iRandom >> 11, iRandom & randomMaskY)];
+
+        uint iGIndex = asuint(trunc(fRandom * iIG));
+        iGIndex = iGIndex < 0 ? 0 : iGIndex;
+        iGIndex = iGIndex >= iIG ? (iIG - 1) : 0;
+        uint gGroupIndex = IG[uint2(iGIndex, 0)];
+        uint newA = MT[uint2(oldA, gGroupIndex)];
+        uint newAInv = iM + iN - 2 - newA;
+
+        //check energy
+        float eold = 0.0f;
+        float enew = 0.0f;
+        for (uint plaqutte = 0; plaqutte < 6; ++plaqutte)
+        {
+            uint resultGIndexOld = ((plaqutte & 1) == 1) ?
+                MT[uint2(MT[uint2(oldA, plaq[plaqutte].x)], MT[uint2(plaq[plaqutte].y, plaq[plaqutte].z)])]
+              : MT[uint2(MT[uint2(plaq[plaqutte].x, plaq[plaqutte].y)], MT[uint2(oldAInv, plaq[plaqutte].z)])];
+
+            uint resultGIndexNew = ((plaqutte & 1) == 1) ?
+                MT[uint2(MT[uint2(newA, plaq[plaqutte].x)], MT[uint2(plaq[plaqutte].y, plaq[plaqutte].z)])]
+              : MT[uint2(MT[uint2(plaq[plaqutte].x, plaq[plaqutte].y)], MT[uint2(newAInv, plaq[plaqutte].z)])];
+
+            eold = eold + fBeta * EI[uint2(resultGIndexOld, 0)];
+            enew = enew + fBeta * EI[uint2(resultGIndexNew, 0)];
+        }
+
+        if (eold > enew)
+        {
+            oldA = newA;
+            oldAInv = newAInv;
+        }
+        else
+        {
+            iRandom = (iRandom + 1) & randomMask;
+            float fRandom = Random[uint2(iRandom >> 11, iRandom & randomMaskY)];
+            if (fRandom < exp(eold - enew))
+            {
+                oldA = newA;
+                oldAInv = newAInv;
+            }
+        }
+    }
+
+    //Update Bound
+}
+
+#pragma kernel Calculate1024
+
+[numthreads(16, 16, 4)]
+void Calculate1024(uint3 id : SV_DispatchThreadID)
+{
+
+}
+
+
