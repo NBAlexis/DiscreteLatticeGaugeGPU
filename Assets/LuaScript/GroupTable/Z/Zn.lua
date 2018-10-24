@@ -100,11 +100,21 @@ end
 -- The smallest non-vanish
 -- rotate forward, or rotate backward, G(2) or G(zn)
 function GetIGTableNumber()
+    -- Z2 is special
+    if 2 == zn then
+        return 1
+    end
+
     return 2
 end
 
 -- rotate forward, or rotate backward, G(2) or G(zn)
 function GetIGTable(i)
+    -- Z2 is special
+    if 2 == zn then
+        return 1
+    end
+
     if zn % 2 == 1  then
         -- Odd
         if 1 == i then

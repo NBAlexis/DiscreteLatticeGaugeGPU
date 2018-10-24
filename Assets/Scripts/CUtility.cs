@@ -34,7 +34,7 @@ public class CGroupTable
             }
             sRet = sRet + sLine + "\n";
         }
-        string sLine2 = "";
+        string sLine2 = "EI: ";
         for (int i = 0; i < m_iM; ++i)
         {
             sLine2 = sLine2 + m_EI[i].ToString() + " ";

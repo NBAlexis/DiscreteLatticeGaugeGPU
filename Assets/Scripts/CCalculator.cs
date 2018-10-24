@@ -15,11 +15,13 @@ public class CCalculator : MonoBehaviour
 {
     public ECalc CalcType;
     public ComputeShader CmpShader;
+    private CManager m_pManager = null;
 
     public bool IsSimulating() { return m_bSimulating; }
     private bool m_bSimulating = false;
     private int m_iEnergyStep = 0;
     private int m_iStep = 0;
+    private int m_iStopStep = 0;
 
     //==============================================
     // data on memory
@@ -27,10 +29,11 @@ public class CCalculator : MonoBehaviour
     private int m_iKernelSetGroupData = -1;
     private int m_iKernelInput = -1;
     private int m_iKernelOutput = -1;
-    private int m_iKernelSetRandom = -1;
     private int m_iKernelInitialWhiteConfiguration = -1;
     private int m_iKernelGetSmallNumber = -1;
     private int m_iKernelGenerateConstants = -1;
+    private int m_iKernelGetEnergyOut = -1;
+    private int m_iKernelResetEnergyHistory = -1;
 
     private int m_iKernelCalculate64 = -1;
     private int m_iKernelCalculate256 = -1;
@@ -39,14 +42,20 @@ public class CCalculator : MonoBehaviour
     private int m_iKernelDisplay256 = -1;
     private int m_iKernelDisplay1024 = -1;
 
+    private int m_iKernelEnergy64 = -1;
+    private int m_iKernelEnergy256= -1;
+    private int m_iKernelEnergy1024 = -1;
+
     private int m_iKernelCalcUsing = -1;
     private int m_iKernelDispUsing = -1;
+    private int m_iKernelEnergyUsing = -1;
     private int m_iCalcDiv = 1;
     private int m_iDispDiv = 1;
+    private int m_iEnergyDiv = 1;
 
     private RenderTexture m_pConfiguration = null;
     private RenderTexture m_pDisplayConfiguration = null;
-    private RenderTexture m_pRandom = null;
+    private RenderTexture m_pEnergyTable = null;
 
     private RenderTexture m_pMT = null;
     private RenderTexture m_pEI = null;
@@ -54,6 +63,8 @@ public class CCalculator : MonoBehaviour
 
     private ComputeBuffer m_pIntBuffer = null;
     private ComputeBuffer m_pFloatBuffer = null;
+    private ComputeBuffer m_pWorkingIntBuffer = null;
+    private ComputeBuffer m_pWorkingFloatBuffer = null;
 
     // { n, 1 << n }
     private int[] m_iSiteNumber = null;
@@ -66,10 +77,11 @@ public class CCalculator : MonoBehaviour
         m_iKernelSetGroupData = CmpShader.FindKernel("SetGroupTables");
         m_iKernelInput = CmpShader.FindKernel("SetConfigurationByInput");
         m_iKernelOutput = CmpShader.FindKernel("ReadConfiguration");
-        m_iKernelSetRandom = CmpShader.FindKernel("SetRandom");
         m_iKernelInitialWhiteConfiguration = CmpShader.FindKernel("InitialWhiteConfiguration");
         m_iKernelGetSmallNumber = CmpShader.FindKernel("GetSmallData");
         m_iKernelGenerateConstants = CmpShader.FindKernel("GenerateConstants");
+        m_iKernelGetEnergyOut = CmpShader.FindKernel("GetEnergyOut");
+        m_iKernelResetEnergyHistory = CmpShader.FindKernel("ResetEnergyHistory");
 
         m_iKernelCalculate64 = CmpShader.FindKernel("Calculate64");
         m_iKernelCalculate256 = CmpShader.FindKernel("Calculate256");
@@ -78,13 +90,32 @@ public class CCalculator : MonoBehaviour
         m_iKernelDisplay256 = CmpShader.FindKernel("Display256");
         m_iKernelDisplay1024 = CmpShader.FindKernel("Display1024");
 
-        SetRandom();
+        m_iKernelEnergy64 = CmpShader.FindKernel("CalculateEnergy64");
+        m_iKernelEnergy256 = CmpShader.FindKernel("CalculateEnergy256");
+        m_iKernelEnergy1024 = CmpShader.FindKernel("CalculateEnergy1024");
+
+        m_pWorkingIntBuffer = new ComputeBuffer(128, 4);
+        m_pWorkingIntBuffer.SetData(new uint[128]);
+        m_pWorkingFloatBuffer = new ComputeBuffer(128, 4);
+        m_pWorkingFloatBuffer.SetData(new float[128]);
+
+        CmpShader.SetBuffer(m_iKernelInput, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+        CmpShader.SetBuffer(m_iKernelOutput, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+        CmpShader.SetBuffer(m_iKernelGenerateConstants, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+        CmpShader.SetBuffer(m_iKernelGetEnergyOut, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+
+        CmpShader.SetBuffer(m_iKernelGetEnergyOut, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+        CmpShader.SetBuffer(m_iKernelResetEnergyHistory, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
     }
 
     public void Update()
     {
         if (m_bSimulating)
         {
+            CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
+            CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
+            CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
+
             CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
             CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
 
@@ -94,23 +125,63 @@ public class CCalculator : MonoBehaviour
             {
                 m_txStep.text = m_iStep.ToString();
             }
+
+            if (m_iStep != 0 && (m_iStep%m_iEnergyStep) == 0)
+            {
+                CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
+
+                m_pFloatBuffer = new ComputeBuffer(1, 4);
+                m_pFloatBuffer.SetData(new float[] { 0.0f } );
+                CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+                CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
+                float[] dataOut = { 0.0f };
+                m_pFloatBuffer.GetData(dataOut);
+
+                if (null != m_pManager)
+                {
+                    m_pManager.LogData(string.Format("step:{0} e:{1}", m_iStep, dataOut[0]));
+                }
+                if (null != m_txEnergy)
+                {
+                    m_txEnergy.text = string.Format("Energy: {0}", dataOut[0]);
+                }
+
+                m_pFloatBuffer.Release();
+                m_pFloatBuffer = null;
+            }
+
+            if (m_iStopStep > 1 && 0 == (m_iStep%m_iStopStep))
+            {
+                PauseSimulate();
+                if (null != m_pManager)
+                {
+                    m_pManager.OnStopSimulation(); 
+                }
+            }
         }
+    }
+
+    public void OnDestroy()
+    {
+        m_pWorkingIntBuffer.Release();
+        m_pWorkingFloatBuffer.Release();
     }
 
     //==============================================
     // Display
     //==============================================
     private Text m_txStep = null;
-    private Text m_txEnergy = null;
+    private InputField m_txEnergy = null;
     private Text m_txStartButton = null;
     private RawImage m_pResImage = null;
 
-    public void InitialDispaly(Text step, Text energy, Text startButton, RawImage image)
+    public void InitialDispaly(Text step, InputField energy, Text startButton, RawImage image, CManager cmanager)
     {
         m_txStep = step;
         m_txEnergy = energy;
         m_txStartButton = startButton;
         m_pResImage = image;
+        m_pManager = cmanager;
     }
 
     //==============================================
@@ -128,22 +199,37 @@ public class CCalculator : MonoBehaviour
                         m_iCalcDiv = 4;
                         m_iKernelDispUsing = m_iKernelDisplay16;
                         m_iDispDiv = 4;
+                        m_iKernelEnergyUsing = m_iKernelEnergy64;
+                        m_iEnergyDiv = 4;
                     }
                     else
                     {
                         m_iKernelCalcUsing = m_iKernelCalculate256;
-                        m_iCalcDiv = 8;
+                        m_iCalcDiv = 16;
+
+                        
                         if (2 == iSiteNumber[0]) //4 sites, 4x4x4x4=16 x 16 sites
                         {
                             m_iKernelDispUsing = m_iKernelDisplay256;
                             m_iDispDiv = 16;
+
+                            m_iKernelEnergyUsing = m_iKernelEnergy256;
+                            m_iEnergyDiv = 16;
                         }
                         else
                         {
                             m_iKernelDispUsing = m_iKernelDisplay1024;
                             m_iDispDiv = 32;
+
+                            m_iKernelEnergyUsing = m_iKernelEnergy1024;
+                            m_iEnergyDiv = 32;
                         }
                     }
+
+                    CmpShader.SetBuffer(m_iKernelCalcUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+                    CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
+                    CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+
                     CmpShader.SetInt("iSiteShift", iSiteNumber[0]);
                     m_iSiteNumber = iSiteNumber;
 
@@ -210,10 +296,14 @@ public class CCalculator : MonoBehaviour
         CmpShader.SetTexture(m_iKernelCalcUsing, "EI", m_pEI);
         CmpShader.SetTexture(m_iKernelCalcUsing, "IG", m_pIG);
 
+        CmpShader.SetTexture(m_iKernelEnergyUsing, "MT", m_pMT);
+        CmpShader.SetTexture(m_iKernelEnergyUsing, "EI", m_pEI);
+
         CmpShader.SetBuffer(m_iKernelSetGroupData, "IntDataBuffer", m_pIntBuffer);
         CmpShader.SetBuffer(m_iKernelSetGroupData, "FloatDataBuffer", m_pFloatBuffer);
         
         CmpShader.Dispatch(m_iKernelSetGroupData, 4, 4, 1);
+        CmpShader.Dispatch(m_iKernelGenerateConstants, 1, 1, 1);
 
         m_pIntBuffer.Release();
         m_pIntBuffer = null;
@@ -247,15 +337,21 @@ public class CCalculator : MonoBehaviour
                     m_pDisplayConfiguration = new RenderTexture(m_iSiteNumber[2], m_iSiteNumber[2], 1, RenderTextureFormat.ARGB32);
                     m_pDisplayConfiguration.enableRandomWrite = true;
                     m_pDisplayConfiguration.Create();
+                    m_pEnergyTable = new RenderTexture(m_iSiteNumber[2], m_iSiteNumber[2], 1, RenderTextureFormat.RGFloat);
+                    m_pEnergyTable.enableRandomWrite = true;
+                    m_pEnergyTable.Create();
 
                     CmpShader.SetTexture(m_iKernelInitialWhiteConfiguration, "Configuration", m_pConfiguration);
                     CmpShader.SetTexture(m_iKernelCalcUsing, "Configuration", m_pConfiguration);
                     CmpShader.SetTexture(m_iKernelInput, "Configuration", m_pConfiguration);
                     CmpShader.SetTexture(m_iKernelOutput, "Configuration", m_pConfiguration);
-                    CmpShader.SetTexture(m_iKernelCalcUsing, "Random", m_pRandom);
 
                     CmpShader.SetTexture(m_iKernelDispUsing, "Configuration", m_pConfiguration);
                     CmpShader.SetTexture(m_iKernelDispUsing, "Display", m_pDisplayConfiguration);
+
+                    CmpShader.SetTexture(m_iKernelEnergyUsing, "Configuration", m_pConfiguration);
+                    CmpShader.SetTexture(m_iKernelEnergyUsing, "EnergyTable", m_pEnergyTable);
+                    CmpShader.SetTexture(m_iKernelGetEnergyOut, "EnergyTable", m_pEnergyTable);
 
                     CmpShader.Dispatch(m_iKernelInitialWhiteConfiguration, m_iSiteNumber[2] / 4, m_iSiteNumber[2] / 4, 1);
 
@@ -267,27 +363,6 @@ public class CCalculator : MonoBehaviour
                 }
                 break;
         }
-    }
-
-    public void SetRandom()
-    {
-        m_pRandom = new RenderTexture(2048, 2048, 1, RenderTextureFormat.RFloat);
-        m_pRandom.enableRandomWrite = true;
-        m_pRandom.Create();
-
-        m_pFloatBuffer = new ComputeBuffer(2048 * 2048, 4);
-        float[] fData = new float[2048 * 2048];
-        for (int i = 0; i < 2048*2048; ++i)
-        {
-            fData[i] = Random.Range(0.0f, 1.0f);
-        }
-        m_pFloatBuffer.SetData(fData);
-        CmpShader.SetBuffer(m_iKernelSetRandom, "FloatDataBuffer", m_pFloatBuffer);
-        CmpShader.SetTexture(m_iKernelSetRandom, "Random", m_pRandom);
-        CmpShader.Dispatch(m_iKernelSetRandom, 2048 / 32, 2048 /32, 1);
-
-        m_pFloatBuffer.Release();
-        m_pFloatBuffer = null;
     }
 
     //==============================================
@@ -313,8 +388,30 @@ public class CCalculator : MonoBehaviour
     //==============================================
     // Simulate
     //==============================================
+    public void ResetStep()
+    {
+        m_iStep = 0;
+        if (null != m_txStep)
+        {
+            m_txStep.text = m_iStep.ToString();
+        }
+    }
 
-    public void StartSimulate(float fBetaT, float fBetaX, int iItera, int iEnergyStep)
+    public void ResetStopStep(int iStopStep)
+    {
+        m_iStopStep = iStopStep;
+    }
+
+    public void ResetEnergyHistory()
+    {
+        CmpShader.Dispatch(m_iKernelResetEnergyHistory, 1, 1, 1);
+        if (null != m_txEnergy)
+        {
+            m_txEnergy.text = "Energy:";
+        }
+    }
+
+    public void StartSimulate(float fBetaT, float fBetaX, int iItera, int iEnergyStep, int iStopStep)
     {
         if (m_bSimulating)
         {
@@ -322,8 +419,8 @@ public class CCalculator : MonoBehaviour
         }
 
         m_iEnergyStep = iEnergyStep;
+        m_iStopStep = iStopStep;
         CmpShader.SetInt("iIteration", iItera);
-        CmpShader.SetInt("iRandom", Random.Range(0, 2048 * 2048 - 1));
         CmpShader.SetFloat("fBetaX", fBetaX);
         CmpShader.SetFloat("fBetaT", fBetaT);
 

@@ -18,6 +18,9 @@ public class CManager : MonoBehaviour
 
     #region Message
 
+    public GameObject MessagePlane;
+    public Text MessageTx;
+
     public static void ShowMessage(string sMessage)
     {
         Debug.Log(sMessage);
@@ -31,7 +34,13 @@ public class CManager : MonoBehaviour
 
     private void ShowMessageFunc(string sMessage)
     {
-        
+        MessageTx.text = sMessage;
+        MessagePlane.SetActive(true);
+    }
+
+    public void OnBtMessageBoxOK()
+    {
+        MessagePlane.SetActive(false);
     }
 
     #endregion
@@ -52,7 +61,7 @@ public class CManager : MonoBehaviour
     {
 	    if (!m_bInitialed)
 	    {
-            G4096_4D.InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage);
+            G4096_4D.InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage, this);
             OnStopSimulation();
 	        m_bInitialed = true;
 	    }
@@ -66,7 +75,7 @@ public class CManager : MonoBehaviour
     private static int[][] m_iSizes =
     {
         new int[]{2, 4, 8, 16, 32, 64 },
-        new int[]{1, 2, 3, 4, 5, 6 },
+        new int[]{1, 2, 3, 4,  5,  6 },
 
         new int[]{2, 4, 8, 16, 32, 64, 128 },
         new int[]{4, 8, 16, 32, 64, 128, 256 },
@@ -87,7 +96,7 @@ public class CManager : MonoBehaviour
         OnStartSimSim();
     }
 
-    private void OnStopSimulation()
+    public void OnStopSimulation()
     {
         OnStopSimulationGroupTable();
         OnStopSimConfig();
@@ -149,7 +158,7 @@ public class CManager : MonoBehaviour
 
         File.WriteAllBytes(sPath, m_pGroupTable.GetGroupTableData());
 
-        GroupTableTitle.text = "Group Table: " + sPath;
+        GroupTableTitle.text = "Group Table:\n" + sPath;
     }
 
     private void LoadGroupTableLua(string sFileName)
@@ -157,7 +166,7 @@ public class CManager : MonoBehaviour
         m_pGroupTable = CUtility.BuildGroupTable(sFileName);
         if (null != m_pGroupTable)
         {
-            GroupTableTitle.text = "Group Table: " + sFileName;
+            GroupTableTitle.text = "Group Table:\n" + sFileName;
             Debug.Log(m_pGroupTable.GetGroupTableDesc());
             G4096_4D.SetGroupTable(m_pGroupTable);
         }
@@ -169,7 +178,7 @@ public class CManager : MonoBehaviour
         byte[] data = File.ReadAllBytes(sFileName);
         m_pGroupTable.FillWithByte(sFileName, data);
         Debug.Log(m_pGroupTable.GetGroupTableDesc());
-        GroupTableTitle.text = "Group Table: " + sFileName;
+        GroupTableTitle.text = "Group Table:\n" + sFileName;
 
         G4096_4D.SetGroupTable(m_pGroupTable);
     }
@@ -205,8 +214,13 @@ public class CManager : MonoBehaviour
         {
             if (iSiteNumber == m_iSizes[2 * (int) m_eCalcType][i])
             {
-                G4096_4D.SetSiteNumber(new [] { m_iSizes[2 * (int)m_eCalcType + 1][i] , m_iSizes[2 * (int)m_eCalcType][i], m_iSizes[2 * (int)m_eCalcType][i] * m_iSizes[2 * (int)m_eCalcType][i] });
-                ConfigTableTitle.text = "Configuration file: White";
+                G4096_4D.SetSiteNumber(new []
+                {
+                    m_iSizes[2 * (int)m_eCalcType + 1][i] ,
+                    m_iSizes[2 * (int)m_eCalcType][i],
+                    m_iSizes[2 * (int)m_eCalcType][i] * m_iSizes[2 * (int)m_eCalcType][i]
+                });
+                ConfigTableTitle.text = "Configuration file:\nWhite";
                 m_bSiteNumberSet = true;
                 OnStopSimulation();
                 return;
@@ -224,6 +238,7 @@ public class CManager : MonoBehaviour
     public void OnBtConfigWhite()
     {
         G4096_4D.SetWhiteConfigure();
+        ConfigTableTitle.text = "Configuration file:\nWhite";
     }
 
     public void OnBtConfigSave()
@@ -254,13 +269,15 @@ public class CManager : MonoBehaviour
     #region Simulation
 
     public Text SimTxtStep;
-    public Text SimTxtEnergy;
+    public InputField SimTxtEnergy;
     public Text SimTxtStartButton;
     public Button SimBtStart;
+    public Button SimBtResetStopStep;
     public InputField SimInputBetaX;
     public InputField SimInputBetaT;
     public InputField SimInputIteration;
     public InputField SimInputEnergyStep;
+    public InputField SimInputStopStep;
 
     public void OnBtStartButton()
     {
@@ -271,11 +288,12 @@ public class CManager : MonoBehaviour
             return;
         }
 
-        int iItera, iEnergyStep;
+        int iItera, iEnergyStep, iStopStep;
         float fBetaX, fBetaT;
 
         int.TryParse(SimInputIteration.text, out iItera);
         int.TryParse(SimInputEnergyStep.text, out iEnergyStep);
+        int.TryParse(SimInputStopStep.text, out iStopStep);
         float.TryParse(SimInputBetaX.text, out fBetaX);
         float.TryParse(SimInputBetaT.text, out fBetaT);
 
@@ -286,7 +304,24 @@ public class CManager : MonoBehaviour
         }
 
         OnStartSimulation();
-        G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep);
+        G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
+    }
+
+    public void OnBtResetEnergyHistory()
+    {
+        G4096_4D.ResetEnergyHistory();
+    }
+
+    public void OnBtResetStep()
+    {
+        G4096_4D.ResetStep();
+    }
+
+    public void OnBtResetStopStep()
+    {
+        int iStopStep;
+        int.TryParse(SimInputStopStep.text, out iStopStep);
+        G4096_4D.ResetStopStep(iStopStep);
     }
 
     private void OnStartSimSim()
@@ -296,6 +331,7 @@ public class CManager : MonoBehaviour
         SimInputIteration.interactable = false;
         SimInputEnergyStep.interactable = false;
         SimBtStart.interactable = true;
+        SimBtResetStopStep.interactable = true;
     }
 
     private void OnStopSimSim()
@@ -305,6 +341,7 @@ public class CManager : MonoBehaviour
         SimInputIteration.interactable = true;
         SimInputEnergyStep.interactable = true;
         SimBtStart.interactable = m_bSiteNumberSet && m_bGroupTableSet;
+        SimBtResetStopStep.interactable = false;
     }
 
     #endregion
@@ -313,6 +350,25 @@ public class CManager : MonoBehaviour
 
     public RawImage ShowImage;
     public Material ShowMat;
+
+    #endregion
+
+    #region Log
+
+    public Text LogTxArea;
+    private const int LogLength = 8192;
+
+    public void LogData(string sData)
+    {
+        Debug.Log(sData);
+        sData = sData + "\n" + LogTxArea.text;
+        sData = sData.Replace("\n\n", "\n");
+        if (sData.Length > LogLength)
+        {
+            sData = sData.Substring(0, LogLength);
+        }
+        LogTxArea.text = sData;
+    }
 
     #endregion
 

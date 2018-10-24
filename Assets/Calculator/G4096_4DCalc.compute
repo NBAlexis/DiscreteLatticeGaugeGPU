@@ -1,7 +1,7 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 
 //===========================================================================
-// Data
+// IO Data
 //===========================================================================
 RWStructuredBuffer<uint> IntDataBuffer;
 RWStructuredBuffer<float> FloatDataBuffer;
@@ -24,29 +24,45 @@ RWTexture2D<int> IG;
 //m x 1
 RWTexture2D<float> EI;
 
-//2048 x 2048
-RWTexture2D<float> Random;
-
 //=========================
 //Values, Note, iM + iN - 1 < 4096
+//They are readonly!
 uint iM;
 uint iN;
 uint iIG;
-uint iSiteNumber;
 uint iSiteShift;
 uint iIteration;
-uint iRandom;
+float fRandomSeed;
 float fBetaX;
 float fBetaT;
+uint iLatticeStartX;
+uint iLatticeStartY;
 
-//Useful Constants
-uint4 fs;
-uint4 bs;
-uint LMask;
-uint mask1;
-uint mask2;
-uint randomMask;
-uint randomMaskY;
+//Variables
+RWTexture2D<float2> EnergyTable;
+
+#define fEnergyDenominator (WorkingFloatDataBuffer[0])
+#define fEnergyNumerator (WorkingFloatDataBuffer[1])
+
+RWStructuredBuffer<float> WorkingFloatDataBuffer;
+
+#define fsx (WorkingIntDataBuffer[0])
+#define fsy (WorkingIntDataBuffer[1])
+#define fsz (WorkingIntDataBuffer[2])
+#define fsw (WorkingIntDataBuffer[3])
+#define bsx (WorkingIntDataBuffer[4])
+#define bsy (WorkingIntDataBuffer[5])
+#define bsz (WorkingIntDataBuffer[6])
+#define bsw (WorkingIntDataBuffer[7])
+
+#define LMask (WorkingIntDataBuffer[8])
+#define mask1 (WorkingIntDataBuffer[9])
+#define mask2 (WorkingIntDataBuffer[10])
+#define mask3 (WorkingIntDataBuffer[11])
+#define iSiteNumber (WorkingIntDataBuffer[12])
+#define iGroupMask (WorkingIntDataBuffer[13])
+
+RWStructuredBuffer<uint> WorkingIntDataBuffer;
 
 #include "CommonFunction.cginc"
 
@@ -60,12 +76,12 @@ uint randomMaskY;
 void SetGroupTables(uint3 id : SV_DispatchThreadID)
 {
     MT[id.xy] = (id.x < iM + iN - 1 && id.y < iM + iN - 1) ? IntDataBuffer[id.x * (iM + iN - 1) + id.y] : -1;
-    if (1 == id.y && id.x < iIG)
+    if (0 == id.y && id.x < iIG)
     {
         IG[id.xy] = IntDataBuffer[(iM + iN - 1) * (iM + iN - 1) + id.x];
     }
 
-    if (1 == id.y && id.x < iM)
+    if (0 == id.y && id.x < iM)
     {
         EI[id.xy] = FloatDataBuffer[id.x];
     }
@@ -88,14 +104,6 @@ void ReadConfiguration(uint3 id : SV_DispatchThreadID)
     IntDataBuffer[2 * ((iSiteNumber * iSiteNumber) * id.x + id.y) + 1] = Configuration[id.xy].g;
 }
 
-#pragma kernel SetRandom
-
-[numthreads(32, 32, 1)]
-void SetRandom(uint3 id : SV_DispatchThreadID)
-{
-    Random[id.xy] = FloatDataBuffer[id.x * 2048 + id.y];
-}
-
 #pragma kernel InitialWhiteConfiguration
 
 [numthreads(4, 4, 1)]
@@ -112,32 +120,69 @@ void GetSmallData(uint3 id : SV_DispatchThreadID)
     IntDataBuffer[0] = iM;
     IntDataBuffer[1] = iN;
     IntDataBuffer[2] = iIG;
-    IntDataBuffer[3] = iSiteNumber;
+    IntDataBuffer[3] = iSiteShift;
     IntDataBuffer[4] = iIteration;
 }
 
+#pragma kernel ResetEnergyHistory
+
+[numthreads(1, 1, 1)]
+void ResetEnergyHistory(uint3 id : SV_DispatchThreadID)
+{
+    fEnergyDenominator = 0.0f;
+    fEnergyNumerator = 0.0f;
+}
+
+#pragma kernel GetEnergyOut
+
+[numthreads(1, 1, 1)]
+void GetEnergyOut(uint3 id : SV_DispatchThreadID)
+{
+    float fTotalEnergy = 0.0f;
+    float fTotalEnergyS = 0.0f;
+    for (uint i = 0; i < iSiteNumber * iSiteNumber; ++i)
+    {
+        for (uint j = 0; j < iSiteNumber * iSiteNumber; ++j)
+        {
+            fTotalEnergy = fTotalEnergy + EnergyTable[uint2(i, j)].r;
+            //fTotalEnergyS = fTotalEnergyS + EnergyTable[uint2(i, j)].g;
+        }
+    }
+    fTotalEnergy = fTotalEnergy / (12.0f * iSiteNumber * iSiteNumber * iSiteNumber * iSiteNumber);
+    //fTotalEnergyS = fTotalEnergyS / (12.0f * iSiteNumber * iSiteNumber * iSiteNumber * iSiteNumber);
+    //float fNewConfigPossiblity = exp(-1.0f * fTotalEnergyS);
+    fEnergyNumerator = fEnergyNumerator + fTotalEnergy;
+    fEnergyDenominator = fEnergyDenominator + 1.0f;
+
+    FloatDataBuffer[0] = fEnergyNumerator / fEnergyDenominator; // fEnergyNumerator / fEnergyDenominator;
+}
+
 #pragma kernel GenerateConstants
+
 [numthreads(1, 1, 1)]
 void GenerateConstants(uint3 id : SV_DispatchThreadID)
 {
-    iSiteNumber = 1 << iSiteShift;
+    iSiteNumber = (1 << iSiteShift);
 
-    fs = int4(1 << (3 * (iSiteShift + 1)),
-              1 << (2 * (iSiteShift + 1)),
-              1 << (1 * (iSiteShift + 1)),
-              1);
-    bs = int4(3 << (3 * (iSiteShift + 1)),
-              3 << (2 * (iSiteShift + 1)),
-              3 << (1 * (iSiteShift + 1)),
-              3);
+    fsx = 1 << (3 * (iSiteShift + 1));
+    fsy = 1 << (2 * (iSiteShift + 1));
+    fsz = 1 << (1 * (iSiteShift + 1));
+    fsw = 1;
+    bsx = (iSiteNumber - 1) << (3 * (iSiteShift + 1));
+    bsy = (iSiteNumber - 1) << (2 * (iSiteShift + 1));
+    bsz = (iSiteNumber - 1) << (1 * (iSiteShift + 1));
+    bsw = (iSiteNumber - 1);
 
     mask1 = (iSiteNumber - 1) << iSiteShift;
     mask2 = iSiteNumber - 1;
+    mask3 = (1 << (2 * iSiteShift)) - 1;
 
-    iRandom = 0;
-    randomMask = (1 << 22) - 1;
-    randomMaskY = (1 << 11) - 1;
+    iGroupMask = 4095 << 12;
 }
+
+//===========================================================================
+// Display Kernel
+//===========================================================================
 
 #pragma kernel Display16
 
@@ -172,146 +217,283 @@ void Display1024(uint3 id : SV_DispatchThreadID)
 
 #pragma kernel Calculate64
 
-[numthreads(4, 4, 4)]
-void Calculate64(uint3 id : SV_DispatchThreadID)
+[numthreads(4, 4, 1)]
+void Calculate64(uint3 oid : SV_DispatchThreadID)
 {
-    uint boundDir = id.z;
-    float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
-    //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
-    //max is 2^(4 x 7) - 1=2^28 - 1
-    uint L = (id.x & mask1) << (3 * (iSiteShift + 1))
-           + (id.x & mask2) << (2 * (iSiteShift + 1))
-           + (id.y & mask1) << (1 * (iSiteShift + 1))
-           + (id.y & mask2);
+    uint2 id = uint2((oid.x + iLatticeStartX) & mask3, (oid.y + iLatticeStartY) & mask3);
+    uint4 fs = uint4(fsx, fsy, fsz, fsw);
+    uint4 bs = uint4(bsx, bsy, bsz, bsw);
 
-    uint3 plaq[6];
-    uint icount = 0;
+    float fRandom = gold_noise(id.xy, fRandomSeed);
+    uint iboundStart = asuint(floor(fRandom * 40));
+    iboundStart = iboundStart < 0 ? 0 : iboundStart;
+    iboundStart = iboundStart >= 40 ? 39 : iboundStart;
 
-    for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+    for (uint boundDir1 = 0; boundDir1 < 4; ++boundDir1)
     {
-        if (plaqutte != boundDir)
+        uint boundDir = (iboundStart + boundDir1) & 3;
+        float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+        //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
+        //max is 2^(4 x 7) - 1=2^28 - 1
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+            + (id.x & mask2) << (2 * (iSiteShift + 1))
+            + (id.y & mask1) << 1
+            + (id.y & mask2);
+
+        uint3 plaq[6];
+        uint icount = 0;
+
+        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
         {
-            plaq[icount] = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-            ++icount;
+            if (plaqutte != boundDir)
+            {
+                plaq[icount] = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                ++icount;
 
-            plaq[icount] = GetBackwardPlaquette(fs, bs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-            ++icount;
-        }
-    }
-
-    uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
-    uint2 oldA2 = uint2(oldA, iM + iN - 2 - oldA);
-
-    for (uint ite = 0; ite < iIteration; ++ite)
-    {
-        uint iGIndexbOld = 0;
-        uint iGIndexbNew = 0;
-        float fEISumOld = 0.0f;
-        float fEISumNew = 0.0f;
-
-        iRandom = (iRandom + 1) & randomMask;
-        float fRandom = Random[uint2(iRandom >> 11, iRandom & randomMaskY)];
-
-        uint iGIndex = asuint(trunc(fRandom * iIG));
-        iGIndex = iGIndex < 0 ? 0 : iGIndex;
-        iGIndex = iGIndex >= iIG ? (iIG - 1) : 0;
-        uint gGroupIndex = IG[uint2(iGIndex, 0)];
-        uint newA = MT[uint2(oldA2.x, gGroupIndex)];
-        uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
-
-        //check energy
-        float2 enery2 = float2(0.0f, 0.0f);
-        for (uint plaqutte = 0; plaqutte < 6; ++plaqutte)
-        {
-            enery2 = enery2 + fBeta * CalcEnergy(plaqutte, oldA2, newA2, plaq[plaqutte], MT, EI);
+                plaq[icount] = GetBackwardPlaquette(fs, bs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                ++icount;
+            }
         }
 
-        iRandom = (iRandom + 1) & randomMask;
-        oldA2 = Exchange(oldA2, newA2, enery2, iRandom, randomMaskY, Random);
-    }
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+        uint2 oldA2 = uint2(oldA, iM + iN - 2 - oldA);
 
-    //Update Bound
+        for (uint ite = 0; ite < iIteration; ++ite)
+        {
+            uint iGIndexbOld = 0;
+            uint iGIndexbNew = 0;
+            float fEISumOld = 0.0f;
+            float fEISumNew = 0.0f;
+
+            fRandom = gold_noise(id.xy, fRandom);
+
+            int iGIndex = asuint(floor(fRandom * iIG));
+            iGIndex = (iGIndex < 0) ? 0 : iGIndex;
+            iGIndex = (iGIndex >= asint(iIG)) ? asint(iIG - 1) : iGIndex;
+            uint gGroupIndex = IG[uint2(asuint(iGIndex), 0)];
+            uint newA = MT[uint2(oldA2.x, gGroupIndex)];
+            uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
+
+            //check energy
+            float2 enery2 = float2(0.0f, 0.0f);
+            for (uint plaqutte = 0; plaqutte < 6; ++plaqutte)
+            {
+                enery2 = enery2 + fBeta * CalcEnergy(plaqutte, oldA2, newA2, plaq[plaqutte], MT, EI);
+            }
+
+            fRandom = gold_noise(id.xy, fRandom);
+            oldA2 = Exchange(oldA2, newA2, enery2, fRandom);
+        }
+
+        //Update Bound
+        if (0 == boundDir)
+        {
+            Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & 4095) + (oldA2.x << 12)), Configuration[id.xy].g);
+        }
+        else if (1 == boundDir)
+        {
+            Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & iGroupMask) + oldA2.x), Configuration[id.xy].g);
+        }
+        else if (2 == boundDir)
+        {
+            Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & 4095) + (oldA2.x << 12)));
+        }
+        else
+        {
+            Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & iGroupMask) + oldA2.x));
+        }
+    }
 }
 
 #pragma kernel Calculate256
 
 //Cannot use 1024 because the variable exceed 16384 (that means only 16 variable can be used in 1024 threads)
-
-[numthreads(8, 8, 4)]
-void Calculate256(uint3 id : SV_DispatchThreadID)
+[numthreads(16, 16, 1)]
+void Calculate256(uint3 oid : SV_DispatchThreadID)
 {
-    uint boundDir = id.z;
-    float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
-    //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
-    //max is 2^(4 x 7) - 1=2^28 - 1
-    uint L = (id.x & mask1) << (3 * (iSiteShift + 1))
-           + (id.x & mask2) << (2 * (iSiteShift + 1))
-           + (id.y & mask1) << (1 * (iSiteShift + 1))
-           + (id.y & mask2);
+    uint2 id = uint2((oid.x + iLatticeStartX) & mask3, (oid.y + iLatticeStartY) & mask3);
+    uint4 fs = uint4(fsx, fsy, fsz, fsw);
+    uint4 bs = uint4(bsx, bsy, bsz, bsw);
 
-    uint3 plaq[6];
-    uint icount = 0;
+    float fRandom = gold_noise(id.xy, fRandomSeed);
+    uint iboundStart = asuint(floor(fRandom * 40));
+    iboundStart = iboundStart < 0 ? 0 : iboundStart;
+    iboundStart = iboundStart >= 40 ? 39 : iboundStart;
 
-    for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+    for (uint boundDir1 = 0; boundDir1 < 4; ++boundDir1)
     {
-        if (plaqutte != boundDir)
+        uint boundDir = (iboundStart + boundDir1) & 3;
+        float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+        //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
+        //max is 2^(4 x 7) - 1=2^28 - 1
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+               + (id.x & mask2) << (2 * (iSiteShift + 1))
+               + (id.y & mask1) << 1
+               + (id.y & mask2);
+
+        uint3 plaq[6];
+        uint icount = 0;
+
+        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
         {
-            plaq[icount] = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-            ++icount;
+            if (plaqutte != boundDir)
+            {
+                plaq[icount] = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                ++icount;
 
-            plaq[icount] = GetBackwardPlaquette(fs, bs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-            ++icount;
-        }
-    }
-
-    uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
-    uint2 oldA2 = uint2(oldA, iM + iN - 2 - oldA);
-
-    for (uint ite = 0; ite < iIteration; ++ite)
-    {
-        uint iGIndexbOld = 0;
-        uint iGIndexbNew = 0;
-        float fEISumOld = 0.0f;
-        float fEISumNew = 0.0f;
-
-        iRandom = (iRandom + 1) & randomMask;
-        float fRandom = Random[uint2(iRandom >> 11, iRandom & randomMaskY)];
-
-        uint iGIndex = asuint(trunc(fRandom * iIG));
-        iGIndex = iGIndex < 0 ? 0 : iGIndex;
-        iGIndex = iGIndex >= iIG ? (iIG - 1) : 0;
-        uint gGroupIndex = IG[uint2(iGIndex, 0)];
-        uint newA = MT[uint2(oldA2.x, gGroupIndex)];
-        uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
-
-        //check energy
-        float2 enery2 = float2(0.0f, 0.0f);
-        for (uint plaqutte = 0; plaqutte < 6; ++plaqutte)
-        {
-            enery2 = enery2 + fBeta * CalcEnergy(plaqutte, oldA2, newA2, plaq[plaqutte], MT, EI);
+                plaq[icount] = GetBackwardPlaquette(fs, bs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                ++icount;
+            }
         }
 
-        iRandom = (iRandom + 1) & randomMask;
-        oldA2 = Exchange(oldA2, newA2, enery2, iRandom, randomMaskY, Random);
-    }
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+        uint2 oldA2 = uint2(oldA, iM + iN - 2 - oldA);
 
-    //Update Bound
-    if (0 == boundDir)
-    {
-        Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & mask2) + (oldA2.x << 12)), Configuration[id.xy].g);
-    }
-    else if (1 == boundDir)
-    {
-        Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & mask1) + oldA2.x), Configuration[id.xy].g);
-    }
-    else if (2 == boundDir)
-    {
-        Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & mask2) + (oldA2.x << 12)));
-    }
-    else
-    {
-        Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & mask1) + oldA2.x));
+        for (uint ite = 0; ite < iIteration; ++ite)
+        {
+            uint iGIndexbOld = 0;
+            uint iGIndexbNew = 0;
+            float fEISumOld = 0.0f;
+            float fEISumNew = 0.0f;
+
+            fRandom = gold_noise(id.xy, fRandom);
+
+            int iGIndex = asuint(floor(fRandom * iIG));
+            iGIndex = (iGIndex < 0) ? 0 : iGIndex;
+            iGIndex = (iGIndex >= asint(iIG)) ? asint(iIG - 1) : iGIndex;
+            uint gGroupIndex = IG[uint2(asuint(iGIndex), 0)];
+            uint newA = MT[uint2(oldA2.x, gGroupIndex)];
+            uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
+
+            //check energy
+            float2 enery2 = float2(0.0f, 0.0f);
+            for (uint plaqutte = 0; plaqutte < 6; ++plaqutte)
+            {
+                enery2 = enery2 + fBeta * CalcEnergy(plaqutte, oldA2, newA2, plaq[plaqutte], MT, EI);
+            }
+
+            fRandom = gold_noise(id.xy, fRandom);
+            oldA2 = Exchange(oldA2, newA2, enery2, fRandom);
+        }
+
+        //Update Bound
+        if (0 == boundDir)
+        {
+            Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & 4095) + (oldA2.x << 12)), Configuration[id.xy].g);
+        }
+        else if (1 == boundDir)
+        {
+            Configuration[id.xy] = int2(asint((asuint(Configuration[id.xy].r) & iGroupMask) + oldA2.x), Configuration[id.xy].g);
+        }
+        else if (2 == boundDir)
+        {
+            Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & 4095) + (oldA2.x << 12)));
+        }
+        else
+        {
+            Configuration[id.xy] = int2(Configuration[id.xy].r, asint((asuint(Configuration[id.xy].g) & iGroupMask) + oldA2.x));
+        }
     }
 }
 
+#pragma kernel CalculateEnergy64
 
+[numthreads(4, 4, 1)]
+void CalculateEnergy64(uint3 id : SV_DispatchThreadID)
+{
+    float fEnergy = 0.0f;
+    //float fEnergyS = 0.0f;
+    for (uint boundDir = 0; boundDir < 4; ++boundDir)
+    {
+        //float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+        uint4 fs = uint4(fsx, fsy, fsz, fsw);
+        //fEnergy = fEnergy + 1.0f;
+
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+            + (id.x & mask2) << (2 * (iSiteShift + 1))
+            + (id.y & mask1) << 1
+            + (id.y & mask2);
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+
+        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+        {
+            if (plaqutte != boundDir)
+            {
+                uint3 plaq = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+                fEnergy += fIncre;
+                //fEnergyS += fBeta * fIncre;
+            }
+        }
+    }
+
+    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
+}
+
+#pragma kernel CalculateEnergy256
+
+[numthreads(16, 16, 1)]
+void CalculateEnergy256(uint3 id : SV_DispatchThreadID)
+{
+    float fEnergy = 0.0f;
+    float fEnergyS = 0.0f;
+    for (uint boundDir = 0; boundDir < 4; ++boundDir)
+    {
+        //float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+        uint4 fs = uint4(fsx, fsy, fsz, fsw);
+        //fEnergy = fEnergy + 1.0f;
+
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+            + (id.x & mask2) << (2 * (iSiteShift + 1))
+            + (id.y & mask1) << 1
+            + (id.y & mask2);
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+
+        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+        {
+            if (plaqutte != boundDir)
+            {
+                uint3 plaq = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+                fEnergy += fIncre;
+                //fEnergyS += fBeta * fIncre;
+            }
+        }
+    }
+
+    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
+}
+
+#pragma kernel CalculateEnergy1024
+
+[numthreads(32, 32, 1)]
+void CalculateEnergy1024(uint3 id : SV_DispatchThreadID)
+{
+    float fEnergy = 0.0f;
+    //float fEnergyS = 0.0f;
+    for (uint boundDir = 0; boundDir < 4; ++boundDir)
+    {
+        //float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
+        uint4 fs = uint4(fsx, fsy, fsz, fsw);
+        //fEnergy = fEnergy + 1.0f;
+
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+            + (id.x & mask2) << (2 * (iSiteShift + 1))
+            + (id.y & mask1) << 1
+            + (id.y & mask2);
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+
+        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+        {
+            if (plaqutte != boundDir)
+            {
+                uint3 plaq = GetForwardPlaquette(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+                fEnergy += fIncre;
+                //fEnergyS += fBeta * fIncre;
+            }
+        }
+    }
+
+    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
+}
