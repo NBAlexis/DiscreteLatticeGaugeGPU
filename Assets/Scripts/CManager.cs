@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using SFB;
@@ -106,6 +107,17 @@ public class CManager : MonoBehaviour
     #region Global
 
 
+
+    #endregion
+
+    #region IO
+
+    public string SaveTextResult(string sContent)
+    {
+        string sFileName = Application.dataPath + _outfolder + "Output/" + DateTime.Now.ToFileTimeUtc().ToString() + ".txt";
+        File.WriteAllText(sFileName, sContent);
+        return sFileName;
+    }
 
     #endregion
 
@@ -288,23 +300,48 @@ public class CManager : MonoBehaviour
             return;
         }
 
-        int iItera, iEnergyStep, iStopStep;
-        float fBetaX, fBetaT;
-
-        int.TryParse(SimInputIteration.text, out iItera);
-        int.TryParse(SimInputEnergyStep.text, out iEnergyStep);
-        int.TryParse(SimInputStopStep.text, out iStopStep);
-        float.TryParse(SimInputBetaX.text, out fBetaX);
-        float.TryParse(SimInputBetaT.text, out fBetaT);
-
-        if (iItera < 1)
+        if (CycleUseCycle.isOn)
         {
-            ShowMessage("Iteration must be >= 1!");
-            return;
-        }
+            int iItera, iTargetStep, iSkipStep;
+            float fBetaXFrom, fBetaXTo, fBetaTFrom, fBetaTTo;
 
-        OnStartSimulation();
-        G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
+            int.TryParse(SimInputIteration.text, out iItera);
+            int.TryParse(CycleInputTotalSteps.text, out iTargetStep);
+            int.TryParse(CycleInputSkipSteps.text, out iSkipStep);
+            float.TryParse(CycleInputBetaXFrom.text, out fBetaXFrom);
+            float.TryParse(CycleInputBetaXFromTo.text, out fBetaXTo);
+            float.TryParse(CycleInputBetaYFrom.text, out fBetaTFrom);
+            float.TryParse(CycleInputBetaYFromTo.text, out fBetaTTo);
+
+            if (iItera < 1)
+            {
+                ShowMessage("Iteration must be >= 1!");
+                return;
+            }
+
+            OnStartSimulation();
+            G4096_4D.StartSimulateUsingCycle(new Vector2(fBetaXFrom, fBetaTTo), new Vector2(fBetaTFrom, fBetaTTo), iTargetStep, iSkipStep, iItera);
+        }
+        else
+        {
+            int iItera, iEnergyStep, iStopStep;
+            float fBetaX, fBetaT;
+
+            int.TryParse(SimInputIteration.text, out iItera);
+            int.TryParse(SimInputEnergyStep.text, out iEnergyStep);
+            int.TryParse(SimInputStopStep.text, out iStopStep);
+            float.TryParse(SimInputBetaX.text, out fBetaX);
+            float.TryParse(SimInputBetaT.text, out fBetaT);
+
+            if (iItera < 1)
+            {
+                ShowMessage("Iteration must be >= 1!");
+                return;
+            }
+
+            OnStartSimulation();
+            G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
+        }
     }
 
     public void OnBtResetEnergyHistory()
@@ -326,22 +363,75 @@ public class CManager : MonoBehaviour
 
     private void OnStartSimSim()
     {
-        SimInputBetaX.interactable = false;
-        SimInputBetaT.interactable = false;
-        SimInputIteration.interactable = false;
-        SimInputEnergyStep.interactable = false;
-        SimBtStart.interactable = true;
-        SimBtResetStopStep.interactable = true;
+        if (CycleUseFixedBeta.isOn)
+        {
+            SimInputBetaX.interactable = false;
+            SimInputBetaT.interactable = false;
+            SimInputIteration.interactable = false;
+            SimInputEnergyStep.interactable = false;
+            SimBtStart.interactable = true;
+            SimBtResetStopStep.interactable = true;
+        }
+
+        if (CycleUseCycle.isOn)
+        {
+            SimInputIteration.interactable = false;
+            CycleInputBetaXFrom.interactable = false;
+            CycleInputBetaXFromTo.interactable = false;
+            CycleInputBetaYFrom.interactable = false;
+            CycleInputBetaYFromTo.interactable = false;
+            CycleInputTotalSteps.interactable = false;
+            CycleInputSkipSteps.interactable = false;
+        }
+
+        CycleUseFixedBeta.interactable = false;
+        CycleUseCycle.interactable = false;
     }
 
     private void OnStopSimSim()
     {
-        SimInputBetaX.interactable = true;
-        SimInputBetaT.interactable = true;
-        SimInputIteration.interactable = true;
-        SimInputEnergyStep.interactable = true;
+        if (CycleUseFixedBeta.isOn)
+        {
+            SimInputBetaX.interactable = true;
+            SimInputBetaT.interactable = true;
+            SimInputIteration.interactable = true;
+            SimInputEnergyStep.interactable = true;
+            SimInputStopStep.interactable = true;
+            SimBtResetStopStep.interactable = false;
+
+            CycleInputBetaXFrom.interactable = false;
+            CycleInputBetaXFromTo.interactable = false;
+            CycleInputBetaYFrom.interactable = false;
+            CycleInputBetaYFromTo.interactable = false;
+            CycleInputTotalSteps.interactable = false;
+            CycleInputSkipSteps.interactable = false;
+
+            CycleBtTerminate.interactable = false;
+        }
+
+        if (CycleUseCycle.isOn)
+        {
+            SimInputBetaX.interactable = false;
+            SimInputBetaT.interactable = false;
+            SimInputIteration.interactable = !G4096_4D.HasCycle();
+            SimInputEnergyStep.interactable = false;
+            SimInputStopStep.interactable = false;
+            SimBtResetStopStep.interactable = false;
+
+            CycleInputBetaXFrom.interactable = !G4096_4D.HasCycle();
+            CycleInputBetaXFromTo.interactable = !G4096_4D.HasCycle();
+            CycleInputBetaYFrom.interactable = !G4096_4D.HasCycle();
+            CycleInputBetaYFromTo.interactable = !G4096_4D.HasCycle();
+            CycleInputTotalSteps.interactable = !G4096_4D.HasCycle();
+            CycleInputSkipSteps.interactable = !G4096_4D.HasCycle();
+
+            CycleUseFixedBeta.interactable = !G4096_4D.HasCycle();
+            CycleUseCycle.interactable = !G4096_4D.HasCycle();
+
+            CycleBtTerminate.interactable = G4096_4D.HasCycle();
+        }
+
         SimBtStart.interactable = m_bSiteNumberSet && m_bGroupTableSet;
-        SimBtResetStopStep.interactable = false;
     }
 
     #endregion
@@ -368,6 +458,47 @@ public class CManager : MonoBehaviour
             sData = sData.Substring(0, LogLength);
         }
         LogTxArea.text = sData;
+    }
+
+    #endregion
+
+    #region Therm Cycle
+
+    public Toggle CycleUseFixedBeta;
+    public Toggle CycleUseCycle;
+    public InputField CycleInputBetaXFrom;
+    public InputField CycleInputBetaXFromTo;
+    public InputField CycleInputBetaYFrom;
+    public InputField CycleInputBetaYFromTo;
+    public InputField CycleInputTotalSteps;
+    public InputField CycleInputSkipSteps;
+    public Button CycleBtTerminate;
+
+    public void OnToggleUseFixedBeta()
+    {
+        if (CycleUseFixedBeta.isOn)
+        {
+            CycleUseCycle.isOn = false;
+            OnStopSimulation();
+        }
+    }
+
+    public void OnToggleUseCycle()
+    {
+        if (CycleUseCycle.isOn)
+        {
+            CycleUseFixedBeta.isOn = false;
+            OnStopSimulation();
+        }
+    }
+
+    public void OnBtTerminateCycle()
+    {
+        if (G4096_4D.HasCycle())
+        {
+            G4096_4D.TerminateSimulateCycle();
+            OnStopSimulation();
+        }
     }
 
     #endregion

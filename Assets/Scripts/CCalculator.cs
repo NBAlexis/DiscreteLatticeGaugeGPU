@@ -1,7 +1,9 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using Random = UnityEngine.Random;
 
 public enum ECalc
 {
@@ -11,11 +13,19 @@ public enum ECalc
     G16_3D,
 }
 
+public enum ESimulateType
+{
+    Fixed,
+    Cycle,
+}
+
+
 public class CCalculator : MonoBehaviour
 {
     public ECalc CalcType;
     public ComputeShader CmpShader;
     private CManager m_pManager = null;
+    private ESimulateType m_eSimType = ESimulateType.Fixed;
 
     public bool IsSimulating() { return m_bSimulating; }
     private bool m_bSimulating = false;
@@ -112,53 +122,238 @@ public class CCalculator : MonoBehaviour
     {
         if (m_bSimulating)
         {
-            CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
-            CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
-            CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
-
-            CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
-            CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
-
-            ++m_iStep;
-
-            if (null != m_txStep)
+            switch (m_eSimType)
             {
-                m_txStep.text = m_iStep.ToString();
+                case ESimulateType.Fixed:
+                    {
+                        CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
+                        CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
+                        CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
+
+                        CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
+                        CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
+
+                        ++m_iStep;
+
+                        if (null != m_txStep)
+                        {
+                            m_txStep.text = m_iStep.ToString();
+                        }
+
+                        if (m_iStep != 0 && (m_iStep % m_iEnergyStep) == 0)
+                        {
+                            CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
+
+                            m_pFloatBuffer = new ComputeBuffer(2, 4);
+                            m_pFloatBuffer.SetData(new float[] { 0.0f, 0.0f });
+                            CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+                            CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
+                            float[] dataOut = { 0.0f, 0.0f };
+                            m_pFloatBuffer.GetData(dataOut);
+                            m_lstEnergyStepList.Add(m_iStep);
+                            m_lstEnergyList.Add(dataOut[1]);
+                            m_lstEnergyList.Add(dataOut[0]);
+                            if (null != m_pManager)
+                            {
+                                m_pManager.LogData(string.Format("step:{0} e:{1}", m_iStep, dataOut[0]));
+                            }
+                            if (null != m_txEnergy)
+                            {
+                                m_txEnergy.text = string.Format("Energy: {0}", dataOut[0]);
+                            }
+
+                            m_pFloatBuffer.Release();
+                            m_pFloatBuffer = null;
+                        }
+
+                        if (m_iStopStep > 1 && 0 == (m_iStep % m_iStopStep))
+                        {
+                            PauseSimulate();
+                            if (null != m_pManager)
+                            {
+                                m_pManager.OnStopSimulation();
+                                string sStp = "\nStep=\n{";
+                                string sE = "\nE=\n{";
+                                string sEav = "\nEav=\n{";
+                                for (int i = 0; i < m_lstEnergyStepList.Count; ++i)
+                                {
+                                    sStp += m_lstEnergyStepList[i].ToString();
+                                    sE += m_lstEnergyList[2 * i].ToString();
+                                    sEav += m_lstEnergyList[2 * i + 1].ToString();
+                                    if (i != m_lstEnergyStepList.Count - 1)
+                                    {
+                                        sStp += ",";
+                                        sE += ",";
+                                        sEav += ",";
+                                    }
+                                    else
+                                    {
+                                        sStp += "}\n";
+                                        sE += "}\n";
+                                        sEav += "}\n";
+                                    }
+                                }
+                                string sFileName = m_pManager.SaveTextResult(string.Format("Fixed Run at:{0}\n", DateTime.Now) + sStp + sE + sEav);
+                                CManager.ShowMessage("Data save to:" + sFileName);
+                                m_pManager.LogData("Stopped. Data save to:" + sFileName);
+                            }
+                        }
+                    }
+                    break;
+                case ESimulateType.Cycle:
+                    {
+                        int iStepNow = m_iStepNow >= m_iSkipStep ? (m_iStepNow - m_iSkipStep) : 0;
+                        //for example, totalstep = 3490, beta from 0.01 to 3.5
+                        //stepnow go from 0,1,...,3490,3491,3492,...,(2*3490)
+                        //when stepnow <= 3490, it is 0.01 + (3.49 / 3490) * stepnow
+                        //when stepnow > 3490, it is 2*3490 - stepnow.  for example, stepnow = 3491, it is 3490-1, stepnow = 2*3490, it is 0
+                        int iMutipNow = (iStepNow > m_iTargetStep) ? (2*m_iTargetStep - iStepNow) : iStepNow;
+                        if (null != m_txStep)
+                        {
+                            m_txStep.text = iMutipNow.ToString();
+                        }
+                        float fCurrentBetaX = m_v3BetaX.x + m_v3BetaX.z * iMutipNow;
+                        float fCurrentBetaT = m_v3BetaT.x + m_v3BetaT.z * iMutipNow;
+
+                        if (m_iStepNow == m_iSkipStep)
+                        {
+                            CmpShader.Dispatch(m_iKernelResetEnergyHistory, 1, 1, 1);
+                            m_lstEnergyList.Clear();
+                        }
+
+                        CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
+                        CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
+                        CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
+                        CmpShader.SetFloat("fBetaX", fCurrentBetaX);
+                        CmpShader.SetFloat("fBetaT", fCurrentBetaT);
+                        CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
+                        CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
+
+                        if (m_iStepNow >= m_iSkipStep)
+                        {
+                            CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
+                            m_pFloatBuffer = new ComputeBuffer(2, 4);
+                            m_pFloatBuffer.SetData(new float[] {0.0f, 0.0f});
+                            CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+                            CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
+                            float[] dataOut = {0.0f, 0.0f};
+                            m_pFloatBuffer.GetData(dataOut);
+                            m_pFloatBuffer.Release();
+                            m_pFloatBuffer = null;
+                            m_lstEnergyList.Add(dataOut[1]);
+                            m_lstEnergyList.Add(dataOut[0]);
+                            if (null != m_pManager)
+                            {
+                                m_pManager.LogData(string.Format("step:{0} e:{1}", m_iStepNow, dataOut[1]));
+                            }
+                        }
+                        else
+                        {
+                            if (null != m_pManager)
+                            {
+                                m_pManager.LogData(string.Format("step:{0} skipping", m_iStepNow));
+                            }
+                        }
+
+                        ++m_iStepNow;
+                        if (CheckStop())
+                        {
+                            return;
+                        }
+                    }
+                    break;
             }
 
-            if (m_iStep != 0 && (m_iStep%m_iEnergyStep) == 0)
-            {
-                CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
-
-                m_pFloatBuffer = new ComputeBuffer(1, 4);
-                m_pFloatBuffer.SetData(new float[] { 0.0f } );
-                CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
-                CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
-                float[] dataOut = { 0.0f };
-                m_pFloatBuffer.GetData(dataOut);
-
-                if (null != m_pManager)
-                {
-                    m_pManager.LogData(string.Format("step:{0} e:{1}", m_iStep, dataOut[0]));
-                }
-                if (null != m_txEnergy)
-                {
-                    m_txEnergy.text = string.Format("Energy: {0}", dataOut[0]);
-                }
-
-                m_pFloatBuffer.Release();
-                m_pFloatBuffer = null;
-            }
-
-            if (m_iStopStep > 1 && 0 == (m_iStep%m_iStopStep))
-            {
-                PauseSimulate();
-                if (null != m_pManager)
-                {
-                    m_pManager.OnStopSimulation(); 
-                }
-            }
         }
+    }
+
+    private bool CheckStop()
+    {
+        if (m_iStepNow > 2 *m_iTargetStep + m_iSkipStep)
+        {
+            PauseSimulate();
+            if (m_lstEnergyList.Count == 4 * m_iTargetStep + 2)
+            {
+                string sData = string.Format("Cycle Run at:{0}\nBetaX=\n{1}", DateTime.Now, "{");
+                for (int i = 0; i <= 2 * m_iTargetStep; ++i)
+                {
+                    int imx = (i > m_iTargetStep) ? (2 * m_iTargetStep - i) : i;
+                    sData += (m_v3BetaX.x + m_v3BetaX.z * imx).ToString();
+                    if (i != 2 * m_iTargetStep)
+                    {
+                        sData += ",";
+                    }
+                    else
+                    {
+                        sData += "}\n";
+                    }
+                }
+
+                sData += "BetaT=\n{";
+                for (int i = 0; i <= 2 * m_iTargetStep; ++i)
+                {
+                    int imx = (i > m_iTargetStep) ? (2 * m_iTargetStep - i) : i;
+                    sData += (m_v3BetaT.x + m_v3BetaT.z * imx).ToString();
+                    if (i != 2 * m_iTargetStep)
+                    {
+                        sData += ",";
+                    }
+                    else
+                    {
+                        sData += "}\n";
+                    }
+                }
+                sData += "E=\n{";
+                for (int i = 0; i <= 2 * m_iTargetStep; ++i)
+                {
+                    sData += m_lstEnergyList[2 * i].ToString();
+                    if (i != 2 * m_iTargetStep)
+                    {
+                        sData += ",";
+                    }
+                    else
+                    {
+                        sData += "}\n";
+                    }
+                }
+                sData += "Eav=\n{";
+                for (int i = 0; i <= 2 * m_iTargetStep; ++i)
+                {
+                    sData += m_lstEnergyList[2 * i + 1].ToString();
+                    if (i != 2 * m_iTargetStep)
+                    {
+                        sData += ",";
+                    }
+                    else
+                    {
+                        sData += "}\n";
+                    }
+                }
+
+                if (null != m_pManager)
+                {
+                    string sFileName = m_pManager.SaveTextResult(sData);
+                    CManager.ShowMessage("Data save to:" + sFileName);
+                    m_pManager.LogData("Stopped. Data save to:" + sFileName);
+                }
+            }
+            else
+            {
+                if (null != m_pManager)
+                {
+                    CManager.ShowMessage("Data Count Not Correct !");
+                    m_pManager.LogData("Stopped");
+                }
+            }
+
+            if (null != m_pManager)
+            {
+                m_pManager.OnStopSimulation();
+            }
+            TerminateSimulateCycle();
+            return true;
+        }
+        return false;
     }
 
     public void OnDestroy()
@@ -409,6 +604,8 @@ public class CCalculator : MonoBehaviour
         {
             m_txEnergy.text = "Energy:";
         }
+        m_lstEnergyList.Clear();
+        m_lstEnergyStepList.Clear();
     }
 
     public void StartSimulate(float fBetaT, float fBetaX, int iItera, int iEnergyStep, int iStopStep)
@@ -417,7 +614,7 @@ public class CCalculator : MonoBehaviour
         {
             return;
         }
-
+        m_eSimType = ESimulateType.Fixed;
         m_iEnergyStep = iEnergyStep;
         m_iStopStep = iStopStep;
         CmpShader.SetInt("iIteration", iItera);
@@ -429,6 +626,62 @@ public class CCalculator : MonoBehaviour
         {
             m_txStartButton.text = "Pause Simulation";
         }
+    }
+
+    private Vector3 m_v3BetaX = Vector3.zero;
+    private Vector3 m_v3BetaT = Vector3.zero;
+    private int m_iTargetStep = -1;
+    private int m_iStepNow = 0;
+    private int m_iSkipStep = 0;
+    private readonly List<float> m_lstEnergyList = new List<float>();
+    private readonly List<int> m_lstEnergyStepList = new List<int>();
+
+    public bool HasCycle()
+    {
+        return m_iTargetStep > 1 && (m_iStepNow <= 2 * m_iTargetStep + m_iSkipStep);
+    }
+
+    public void StartSimulateUsingCycle(Vector2 vBetaX, Vector2 vBetaT, int iTotalStep, int iSkip, int iItera)
+    {
+        if (m_iTargetStep > 1)
+        {
+            m_bSimulating = true;
+            return;
+        }
+
+        if (iTotalStep < 2)
+        {
+            CManager.ShowMessage("Step must be >= 2 !");
+            return;
+        }
+        if (iSkip < 0)
+        {
+            CManager.ShowMessage("Skip Step must be >= 0 !");
+            return;
+        }
+
+        m_eSimType = ESimulateType.Cycle;
+        m_iStepNow = 0;
+        m_iTargetStep = iTotalStep;
+        m_iSkipStep = iSkip;
+        CmpShader.SetInt("iIteration", iItera);
+        m_v3BetaX = new Vector3(vBetaX.x, vBetaX.y, (vBetaX.y - vBetaX.x) / iTotalStep);
+        m_v3BetaT = new Vector3(vBetaT.x, vBetaT.y, (vBetaT.y - vBetaT.x) / iTotalStep);
+        m_lstEnergyList.Clear();
+        CmpShader.Dispatch(m_iKernelResetEnergyHistory, 1, 1, 1);
+
+        m_bSimulating = true;
+        if (null != m_txStartButton)
+        {
+            m_txStartButton.text = "Pause Simulation";
+        }
+    }
+
+    public void TerminateSimulateCycle()
+    {
+        m_iTargetStep = -1;
+        m_iSkipStep = -1;
+        m_bSimulating = false;
     }
 
     public void PauseSimulate()

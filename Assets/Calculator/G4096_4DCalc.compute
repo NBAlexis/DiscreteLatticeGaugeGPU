@@ -155,6 +155,7 @@ void GetEnergyOut(uint3 id : SV_DispatchThreadID)
     fEnergyDenominator = fEnergyDenominator + 1.0f;
 
     FloatDataBuffer[0] = fEnergyNumerator / fEnergyDenominator; // fEnergyNumerator / fEnergyDenominator;
+    FloatDataBuffer[1] = fTotalEnergy;
 }
 
 #pragma kernel GenerateConstants
@@ -271,7 +272,7 @@ void Calculate64(uint3 oid : SV_DispatchThreadID)
             iGIndex = (iGIndex < 0) ? 0 : iGIndex;
             iGIndex = (iGIndex >= asint(iIG)) ? asint(iIG - 1) : iGIndex;
             uint gGroupIndex = IG[uint2(asuint(iGIndex), 0)];
-            uint newA = MT[uint2(oldA2.x, gGroupIndex)];
+            uint newA = MT[uint2(gGroupIndex, oldA2.x)];
             uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
 
             //check energy
@@ -362,7 +363,7 @@ void Calculate256(uint3 oid : SV_DispatchThreadID)
             iGIndex = (iGIndex < 0) ? 0 : iGIndex;
             iGIndex = (iGIndex >= asint(iIG)) ? asint(iIG - 1) : iGIndex;
             uint gGroupIndex = IG[uint2(asuint(iGIndex), 0)];
-            uint newA = MT[uint2(oldA2.x, gGroupIndex)];
+            uint newA = MT[uint2(gGroupIndex, oldA2.x)];
             uint2 newA2 = uint2(newA, iM + iN - 2 - newA);
 
             //check energy

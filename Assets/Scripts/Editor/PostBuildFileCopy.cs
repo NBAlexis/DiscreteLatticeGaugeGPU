@@ -49,6 +49,7 @@ public class PostBuildFileCopy
         DirectoryInfo targetDir1 = new DirectoryInfo(sFolder + "/LuaScript");
         DirectoryInfo targetDir2 = new DirectoryInfo(sFolder + "/WorkingData");
         DirectoryInfo targetDir3 = new DirectoryInfo(sFolder + "/Doc");
+        DirectoryInfo targetDir4 = new DirectoryInfo(sFolder + "/Output");
 
         if (targetDir1.Exists)
         {
@@ -61,6 +62,10 @@ public class PostBuildFileCopy
         if (targetDir3.Exists)
         {
             targetDir3.Delete(true);
+        }
+        if (targetDir4.Exists)
+        {
+            targetDir4.Delete(true);
         }
 
         targetDir.CreateSubdirectory("LuaScript");
@@ -106,6 +111,22 @@ public class PostBuildFileCopy
                 sFullName = sFullName.Replace("\\", "/");
 
                 sFullName = sFullName.Replace(sToBeReplace, sFolder + "/Doc/");
+                CreateIfNeed(sFullName);
+                File.Copy(f.FullName, sFullName);
+            }
+        }
+
+        targetDir.CreateSubdirectory("Output");
+        foreach (FileInfo f in new DirectoryInfo(Application.dataPath + "/Output").GetFiles("*.gitignore", SearchOption.AllDirectories))
+        {
+            if (!Expelled(f.FullName))
+            {
+                string sFullName = f.FullName;
+                string sToBeReplace = Application.dataPath + "/Output/";
+                sToBeReplace = sToBeReplace.Replace("\\", "/");
+                sFullName = sFullName.Replace("\\", "/");
+
+                sFullName = sFullName.Replace(sToBeReplace, sFolder + "/Output/");
                 CreateIfNeed(sFullName);
                 File.Copy(f.FullName, sFullName);
             }
