@@ -34,6 +34,16 @@ inline uint2 GetSiteIndexG4096_4D(uint L, uint isitefhift, uint siteMask)
                 );
 }
 
+inline uint2 GetSiteIndexG4096_3D(uint L, uint isitefhift, uint siteMask, uint halfmaskup, uint halfmaskdown)
+{
+    uint x = (L >> (2 * (isitefhift + 1))) & siteMask;
+    uint y = (L >> (isitefhift + 1)) & siteMask;
+    uint z = L & siteMask;
+
+    //z have upper part in y, and lower part in x
+    return uint2(x + (z & halfmaskdown) << isitefhift, x + (z & halfmaskup) << isitefhift);
+}
+
 //-------------------------------------
 //Get Plaquette
 //-------------------------------------
@@ -50,7 +60,7 @@ inline uint2 GetSiteIndexG4096_4D(uint L, uint isitefhift, uint siteMask)
 // d = [site][p_dir]^-1
 // Uabcd
 // return uint3(b, c, d)
-inline uint3 GetForwardPlaquette(uint4 fs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN)
+inline uint3 GetForwardPlaquette4D(uint4 fs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN)
 {
     uint Lprime1 = (fs[plaquttedir] + L);
     uint Lprime2 = (fs[bounddir] + L);
@@ -74,13 +84,36 @@ inline uint3 GetForwardPlaquette(uint4 fs, uint plaquttedir, uint bounddir, uint
 // d = [site-p_dir][p_dir]^-1
 // Ucbad
 // return uint3(c, b, d)
-inline uint3 GetBackwardPlaquette(uint4 fs, uint4 bs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN)
+inline uint3 GetBackwardPlaquette4D(uint4 fs, uint4 bs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN)
 {
     uint Lprime3 = (bs[plaquttedir] + L);
     uint Lprime4 = (bs[plaquttedir] + fs[bounddir] + L);
     uint gb2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime4, isitefhift, _mask2), plaquttedir);
     uint gc2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), bounddir);
     uint gd2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), plaquttedir);
+    return uint3(gc2, gb2, iM + iN - 2 - gd2);
+}
+
+//==================
+//The version for 3D
+inline uint3 GetForwardPlaquette3D(uint4 fs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown)
+{
+    uint Lprime1 = (fs[plaquttedir] + L);
+    uint Lprime2 = (fs[bounddir] + L);
+
+    uint gb1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime2, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
+    uint gc1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime1, isitefhift, _mask2, halfmaskup, halfmaskdown), bounddir);
+    uint gd1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(L, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
+    return uint3(gb1, iM + iN - 2 - gc1, iM + iN - 2 - gd1);
+}
+
+inline uint3 GetBackwardPlaquette3D(uint4 fs, uint4 bs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown)
+{
+    uint Lprime3 = (bs[plaquttedir] + L);
+    uint Lprime4 = (bs[plaquttedir] + fs[bounddir] + L);
+    uint gb2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime4, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
+    uint gc2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown), bounddir);
+    uint gd2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
     return uint3(gc2, gb2, iM + iN - 2 - gd2);
 }
 
@@ -135,3 +168,26 @@ inline float gold_noise(uint2 coordinate, float seed)
 {
     return frac(tan(distance(float2(coordinate.x*(seed + PHI), coordinate.y*(seed + PHI)), float2(PHI, PI)))*SQ2);
 }
+
+
+//iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
+//max is 2^(4 x 7) - 1=2^28 - 1
+//x = (id.x & mask1) >> iSiteShift
+//y = (id.x & mask2)
+//z = (id.y & mask1) >> iSiteShift
+//w = (id.y & mask2)
+//L = x << (iSiteShift + 1) * 3 + y << (iSiteShift + 1) * 2 + z << iSiteShift + 1
+#define id_to_Lsite_4d (id.x & mask1) << (2 * iSiteShift + 3) \
+                     + (id.x & mask2) << (2 * (iSiteShift + 1)) \
+                     + (id.y & mask1) << 1 \
+                     + (id.y & mask2)
+
+
+//x = id.x & mask2
+//y = id.y & mask2
+//z = id.x & mask4 >> iSiteShift + id.y & mask4 >> (iSiteShift + iHalfSiteShift)
+//L = x << (iSiteShift + 1) * 2 + y << (iSiteShift + 1) + z
+#define id_to_Lsite_3d (id.x & mask2) << (2 * iSiteShift + 2) \
+                     + (id.y & mask2) << (iSiteShift + 1) \
+                     + (id.x & mask4) >> iSiteShift + (id.y & mask4) >> (iSiteShift + iHalfSiteShift)
+

@@ -46,8 +46,11 @@ public class CManager : MonoBehaviour
 
     #endregion
 
-    void Start ()
+    void Start()
     {
+        Application.runInBackground = true;
+        Application.targetFrameRate = -1;
+
         //32 bit signed int per channel
         //4 bit per site, up to Z16
         //capable for 16 sites
@@ -55,31 +58,43 @@ public class CManager : MonoBehaviour
         Debug.Log(SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.RGInt));
         Instance = this;
 
-
+        m_pCalcs = new [] { G4096_4D, null, G4096_3D, null };
+        //RenderTexture r2test = new RenderTexture(16384, 16384, 1, RenderTextureFormat.RGFloat);
+        //r2test.enableRandomWrite = true;
+        //r2test.Create();
     }
-	
-	void Update ()
+
+    void Update()
     {
-	    if (!m_bInitialed)
-	    {
-            G4096_4D.InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage, this);
+        if (!m_bInitialed)
+        {
+            m_pCalcs[(int)m_eCalcType].InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage, this);
             OnStopSimulation();
-	        m_bInitialed = true;
-	    }
-	}
+            m_bInitialed = true;
+        }
+    }
 
     #region Calculator
 
     public CCalculator G4096_4D;
+    public CCalculator G4096_3D;
     private ECalc m_eCalcType = ECalc.G4096_4D;
+
+    private CCalculator[] m_pCalcs = null;
 
     private static int[][] m_iSizes =
     {
+        //G4096_4D
         new int[]{2, 4, 8, 16, 32, 64 },
         new int[]{1, 2, 3, 4,  5,  6 },
 
-        new int[]{2, 4, 8, 16, 32, 64, 128 },
-        new int[]{4, 8, 16, 32, 64, 128, 256 },
+        new int[]{4, 16, 64, 256 },
+        new int[]{2,  4,  6,   8 },
+
+        //G4096_3D
+        new int[]{4, 16, 64, 256 },
+        new int[]{2,  4,  6,   8 },
+
         new int[]{4, 8, 16, 32, 64, 128, 256 },
     };
 
@@ -106,7 +121,30 @@ public class CManager : MonoBehaviour
 
     #region Global
 
+    public Dropdown DropGlobalOption;
 
+    public void OnDropDownGlobalOptionChanged()
+    {
+        ECalc eNew = (ECalc)DropGlobalOption.value;
+        if (eNew == m_eCalcType)
+        {
+            return;
+        }
+
+        if (eNew == ECalc.G4096_4D || eNew == ECalc.G4096_3D)
+        {
+            m_eCalcType = eNew;
+            m_bGroupTableSet = false;
+            m_bSiteNumberSet = false;
+            m_pCalcs[(int)m_eCalcType].InitialDispaly(SimTxtStep, SimTxtEnergy, SimTxtStartButton, ShowImage, this);
+            OnStopSimulation();
+        }
+        else
+        {
+            DropGlobalOption.value = (int)m_eCalcType;
+            ShowMessage("This type is not supported yet.");
+        }
+    }
 
     #endregion
 
@@ -180,7 +218,7 @@ public class CManager : MonoBehaviour
         {
             GroupTableTitle.text = "Group Table:\n" + sFileName;
             Debug.Log(m_pGroupTable.GetGroupTableDesc());
-            G4096_4D.SetGroupTable(m_pGroupTable);
+            m_pCalcs[(int)m_eCalcType].SetGroupTable(m_pGroupTable);
         }
     }
 
@@ -192,7 +230,7 @@ public class CManager : MonoBehaviour
         Debug.Log(m_pGroupTable.GetGroupTableDesc());
         GroupTableTitle.text = "Group Table:\n" + sFileName;
 
-        G4096_4D.SetGroupTable(m_pGroupTable);
+        m_pCalcs[(int)m_eCalcType].SetGroupTable(m_pGroupTable);
     }
 
     private void OnStartSimulationGroupTable()
@@ -226,11 +264,10 @@ public class CManager : MonoBehaviour
         {
             if (iSiteNumber == m_iSizes[2 * (int) m_eCalcType][i])
             {
-                G4096_4D.SetSiteNumber(new []
+                m_pCalcs[(int)m_eCalcType].SetSiteNumber(new []
                 {
-                    m_iSizes[2 * (int)m_eCalcType + 1][i] ,
-                    m_iSizes[2 * (int)m_eCalcType][i],
-                    m_iSizes[2 * (int)m_eCalcType][i] * m_iSizes[2 * (int)m_eCalcType][i]
+                    m_iSizes[2 * (int)m_eCalcType + 1][i],
+                    m_iSizes[2 * (int)m_eCalcType][i]
                 });
                 ConfigTableTitle.text = "Configuration file:\nWhite";
                 m_bSiteNumberSet = true;
@@ -249,7 +286,7 @@ public class CManager : MonoBehaviour
 
     public void OnBtConfigWhite()
     {
-        G4096_4D.SetWhiteConfigure();
+        m_pCalcs[(int)m_eCalcType].SetWhiteConfigure();
         ConfigTableTitle.text = "Configuration file:\nWhite";
     }
 
@@ -293,21 +330,22 @@ public class CManager : MonoBehaviour
 
     public void OnBtStartButton()
     {
-        if (G4096_4D.IsSimulating())
+        if (m_pCalcs[(int)m_eCalcType].IsSimulating())
         {
-            G4096_4D.PauseSimulate();
+            m_pCalcs[(int)m_eCalcType].PauseSimulate();
             OnStopSimulation();
             return;
         }
 
         if (CycleUseCycle.isOn)
         {
-            int iItera, iTargetStep, iSkipStep;
+            int iItera, iTargetStep, iSkipStep, iStableStep;
             float fBetaXFrom, fBetaXTo, fBetaTFrom, fBetaTTo;
 
             int.TryParse(SimInputIteration.text, out iItera);
             int.TryParse(CycleInputTotalSteps.text, out iTargetStep);
             int.TryParse(CycleInputSkipSteps.text, out iSkipStep);
+            int.TryParse(CycleInputStableSteps.text, out iStableStep);
             float.TryParse(CycleInputBetaXFrom.text, out fBetaXFrom);
             float.TryParse(CycleInputBetaXFromTo.text, out fBetaXTo);
             float.TryParse(CycleInputBetaYFrom.text, out fBetaTFrom);
@@ -320,7 +358,7 @@ public class CManager : MonoBehaviour
             }
 
             OnStartSimulation();
-            G4096_4D.StartSimulateUsingCycle(new Vector2(fBetaXFrom, fBetaTTo), new Vector2(fBetaTFrom, fBetaTTo), iTargetStep, iSkipStep, iItera);
+            m_pCalcs[(int)m_eCalcType].StartSimulateUsingCycle(new Vector2(fBetaXFrom, fBetaTTo), new Vector2(fBetaTFrom, fBetaTTo), iTargetStep, iSkipStep, iStableStep, iItera);
         }
         else
         {
@@ -340,25 +378,25 @@ public class CManager : MonoBehaviour
             }
 
             OnStartSimulation();
-            G4096_4D.StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
+            m_pCalcs[(int)m_eCalcType].StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
         }
     }
 
     public void OnBtResetEnergyHistory()
     {
-        G4096_4D.ResetEnergyHistory();
+        m_pCalcs[(int)m_eCalcType].ResetEnergyHistory();
     }
 
     public void OnBtResetStep()
     {
-        G4096_4D.ResetStep();
+        m_pCalcs[(int)m_eCalcType].ResetStep();
     }
 
     public void OnBtResetStopStep()
     {
         int iStopStep;
         int.TryParse(SimInputStopStep.text, out iStopStep);
-        G4096_4D.ResetStopStep(iStopStep);
+        m_pCalcs[(int)m_eCalcType].ResetStopStep(iStopStep);
     }
 
     private void OnStartSimSim()
@@ -382,6 +420,7 @@ public class CManager : MonoBehaviour
             CycleInputBetaYFromTo.interactable = false;
             CycleInputTotalSteps.interactable = false;
             CycleInputSkipSteps.interactable = false;
+            CycleInputStableSteps.interactable = false;
         }
 
         CycleUseFixedBeta.interactable = false;
@@ -405,6 +444,7 @@ public class CManager : MonoBehaviour
             CycleInputBetaYFromTo.interactable = false;
             CycleInputTotalSteps.interactable = false;
             CycleInputSkipSteps.interactable = false;
+            CycleInputStableSteps.interactable = false;
 
             CycleBtTerminate.interactable = false;
         }
@@ -413,22 +453,23 @@ public class CManager : MonoBehaviour
         {
             SimInputBetaX.interactable = false;
             SimInputBetaT.interactable = false;
-            SimInputIteration.interactable = !G4096_4D.HasCycle();
+            SimInputIteration.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
             SimInputEnergyStep.interactable = false;
             SimInputStopStep.interactable = false;
             SimBtResetStopStep.interactable = false;
 
-            CycleInputBetaXFrom.interactable = !G4096_4D.HasCycle();
-            CycleInputBetaXFromTo.interactable = !G4096_4D.HasCycle();
-            CycleInputBetaYFrom.interactable = !G4096_4D.HasCycle();
-            CycleInputBetaYFromTo.interactable = !G4096_4D.HasCycle();
-            CycleInputTotalSteps.interactable = !G4096_4D.HasCycle();
-            CycleInputSkipSteps.interactable = !G4096_4D.HasCycle();
+            CycleInputBetaXFrom.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputBetaXFromTo.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputBetaYFrom.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputBetaYFromTo.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputTotalSteps.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputSkipSteps.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleInputStableSteps.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
 
-            CycleUseFixedBeta.interactable = !G4096_4D.HasCycle();
-            CycleUseCycle.interactable = !G4096_4D.HasCycle();
+            CycleUseFixedBeta.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
+            CycleUseCycle.interactable = !m_pCalcs[(int)m_eCalcType].HasCycle();
 
-            CycleBtTerminate.interactable = G4096_4D.HasCycle();
+            CycleBtTerminate.interactable = m_pCalcs[(int)m_eCalcType].HasCycle();
         }
 
         SimBtStart.interactable = m_bSiteNumberSet && m_bGroupTableSet;
@@ -472,6 +513,7 @@ public class CManager : MonoBehaviour
     public InputField CycleInputBetaYFromTo;
     public InputField CycleInputTotalSteps;
     public InputField CycleInputSkipSteps;
+    public InputField CycleInputStableSteps;
     public Button CycleBtTerminate;
 
     public void OnToggleUseFixedBeta()
@@ -494,9 +536,9 @@ public class CManager : MonoBehaviour
 
     public void OnBtTerminateCycle()
     {
-        if (G4096_4D.HasCycle())
+        if (m_pCalcs[(int)m_eCalcType].HasCycle())
         {
-            G4096_4D.TerminateSimulateCycle();
+            m_pCalcs[(int)m_eCalcType].TerminateSimulateCycle();
             OnStopSimulation();
         }
     }
