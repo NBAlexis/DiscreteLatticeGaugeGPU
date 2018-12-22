@@ -33,17 +33,18 @@ uint iIG;
 uint iSiteShift;
 uint iIteration;
 float fRandomSeed;
-float fBetaX;
-float fBetaT;
+float fBeta;
 uint iLatticeStartX;
 uint iLatticeStartY;
 uint iPlaqNumber;
+uint iSumSkip;
 
 //Variables
-RWTexture2D<float2> EnergyTable;
+RWTexture2D<float> EnergyTable;
 
 #define fEnergyDenominator (WorkingFloatDataBuffer[0])
 #define fEnergyNumerator (WorkingFloatDataBuffer[1])
+#define fTotalEnergyAccumulate (WorkingFloatDataBuffer[2])
 
 RWStructuredBuffer<float> WorkingFloatDataBuffer;
 
@@ -62,9 +63,12 @@ RWStructuredBuffer<float> WorkingFloatDataBuffer;
 #define mask3 (WorkingIntDataBuffer[11])
 #define iSiteNumber (WorkingIntDataBuffer[12])
 #define iGroupMask (WorkingIntDataBuffer[13])
+
+#define iTexturewidth (WorkingIntDataBuffer[14])
+
 //for 3D
-#define mask4 (WorkingIntDataBuffer[14])
-#define iHalfSiteShift (WorkingIntDataBuffer[15])
+//#define mask4 (WorkingIntDataBuffer[14])
+//#define iHalfSiteShift (WorkingIntDataBuffer[15])
 
 
 RWStructuredBuffer<uint> WorkingIntDataBuffer;
@@ -136,15 +140,15 @@ void ResetEnergyHistory(uint3 id : SV_DispatchThreadID)
 void GetEnergyOut(uint3 id : SV_DispatchThreadID)
 {
     float fTotalEnergy = 0.0f;
-    float fTotalEnergyS = 0.0f;
-    for (uint i = 0; i < iSiteNumber * iSiteNumber; ++i)
+    //float fTotalEnergyS = 0.0f;
+    for (uint i = 0; i < iTexturewidth; i+=iSumSkip)
     {
-        for (uint j = 0; j < iSiteNumber * iSiteNumber; ++j)
+        for (uint j = 0; j < iTexturewidth; j+=iSumSkip)
         {
-            fTotalEnergy = fTotalEnergy + EnergyTable[uint2(i, j)].r;
-            //fTotalEnergyS = fTotalEnergyS + EnergyTable[uint2(i, j)].g;
+            fTotalEnergy = fTotalEnergy + EnergyTable[uint2(i, j)];
         }
     }
+
     fTotalEnergy = fTotalEnergy / iPlaqNumber;
     //fTotalEnergyS = fTotalEnergyS / (12.0f * iSiteNumber * iSiteNumber * iSiteNumber * iSiteNumber);
     //float fNewConfigPossiblity = exp(-1.0f * fTotalEnergyS);
@@ -174,11 +178,9 @@ void GenerateConstants(uint3 id : SV_DispatchThreadID)
     mask1 = (iSiteNumber - 1) << iSiteShift;
     mask2 = iSiteNumber - 1;
     mask3 = (1 << (2 * iSiteShift)) - 1;
+    iTexturewidth = (1 << (2 * iSiteShift));
 
     iGroupMask = 4095 << 12;
-
-    iHalfSiteShift = iSiteShift >> 1;
-    mask4 = ((1 << iHalfSiteShift) - 1) << iSiteShift;
 }
 
 //===========================================================================
@@ -243,13 +245,12 @@ void Calculate16(uint3 oid : SV_DispatchThreadID)
     for (uint boundDir1 = 0; boundDir1 < 4; ++boundDir1)
     {
         uint boundDir = (iboundStart + boundDir1) & 3;
-        float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
         //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
         //max is 2^(4 x 7) - 1=2^28 - 1
         uint L = (id.x & mask1) << (2 * iSiteShift + 3)
-            + (id.x & mask2) << (2 * (iSiteShift + 1))
-            + (id.y & mask1) << 1
-            + (id.y & mask2);
+               + (id.x & mask2) << (2 * (iSiteShift + 1))
+               + (id.y & mask1) << 1
+               + (id.y & mask2);
 
         uint3 plaq[6];
         uint icount = 0;
@@ -335,10 +336,9 @@ void Calculate256(uint3 oid : SV_DispatchThreadID)
     for (uint boundDir1 = 0; boundDir1 < 4; ++boundDir1)
     {
         uint boundDir = (iboundStart + boundDir1) & 3;
-        float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
         //iSiteShift max is 6 (for 64 x 64 x 64 x 64 sites)
         //max is 2^(4 x 7) - 1=2^28 - 1
-        uint L = id_to_Lsite_3d;
+        uint L = id_to_Lsite_4d;
 
         uint3 plaq[6];
         uint icount = 0;
@@ -424,59 +424,21 @@ void CalculateEnergy16(uint3 id : SV_DispatchThreadID)
             + (id.y & mask2);
         uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
 
-        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+        for (uint plaqutte = boundDir + 1; plaqutte < 4; ++plaqutte)
         {
-            if (plaqutte != boundDir)
-            {
-                uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
-                fEnergy += fIncre;
-                //fEnergyS += fBeta * fIncre;
-            }
+            uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+            float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+            fEnergy += fIncre;
         }
     }
-
-    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
+    //fTotalEnergyAccumulate = fTotalEnergyAccumulate + fEnergy;
+    EnergyTable[id.xy] = fEnergy;
 }
 
 #pragma kernel CalculateEnergy256
 
 [numthreads(16, 16, 1)]
 void CalculateEnergy256(uint3 id : SV_DispatchThreadID)
-{
-    float fEnergy = 0.0f;
-    float fEnergyS = 0.0f;
-    for (uint boundDir = 0; boundDir < 4; ++boundDir)
-    {
-        //float fBeta = (0 == boundDir) ? fBetaT : fBetaX;
-        uint4 fs = uint4(fsx, fsy, fsz, fsw);
-        //fEnergy = fEnergy + 1.0f;
-
-        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
-            + (id.x & mask2) << (2 * (iSiteShift + 1))
-            + (id.y & mask1) << 1
-            + (id.y & mask2);
-        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
-
-        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
-        {
-            if (plaqutte != boundDir)
-            {
-                uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
-                fEnergy += fIncre;
-                //fEnergyS += fBeta * fIncre;
-            }
-        }
-    }
-
-    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
-}
-
-#pragma kernel CalculateEnergy1024
-
-[numthreads(32, 32, 1)]
-void CalculateEnergy1024(uint3 id : SV_DispatchThreadID)
 {
     float fEnergy = 0.0f;
     //float fEnergyS = 0.0f;
@@ -492,17 +454,120 @@ void CalculateEnergy1024(uint3 id : SV_DispatchThreadID)
             + (id.y & mask2);
         uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
 
-        for (uint plaqutte = 0; plaqutte < 4; ++plaqutte)
+        for (uint plaqutte = boundDir + 1; plaqutte < 4; ++plaqutte)
         {
-            if (plaqutte != boundDir)
-            {
-                uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
-                float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
-                fEnergy += fIncre;
-                //fEnergyS += fBeta * fIncre;
-            }
+            uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+            float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+            fEnergy += fIncre;
         }
     }
-
-    EnergyTable[id.xy] = float2(fEnergy, EnergyTable[id.xy].g);
+    //fTotalEnergyAccumulate = fTotalEnergyAccumulate + fEnergy;
+    EnergyTable[id.xy] = fEnergy;
 }
+
+#pragma kernel CalculateEnergy1024
+
+[numthreads(32, 32, 1)]
+void CalculateEnergy1024(uint3 id : SV_DispatchThreadID)
+{
+    float fEnergy = 0.0f;
+    //float fEnergyS = 0.0f;
+    for (uint boundDir = 0; boundDir < 4; ++boundDir)
+    {
+        uint4 fs = uint4(fsx, fsy, fsz, fsw);
+        //fEnergy = fEnergy + 1.0f;
+
+        uint L = (id.x & mask1) << (2 * iSiteShift + 3)
+               + (id.x & mask2) << (2 * (iSiteShift + 1))
+               + (id.y & mask1) << 1
+               + (id.y & mask2);
+        uint oldA = GetGvalueG4096_4D(Configuration, id.xy, boundDir);
+
+        for (uint plaqutte = boundDir + 1; plaqutte < 4; ++plaqutte)
+        {
+            uint3 plaq = GetForwardPlaquette4D(fs, plaqutte, boundDir, L, iSiteShift, mask2, Configuration, iM, iN);
+            float fIncre = CalcEnergySingle(plaqutte, oldA, plaq, MT, EI);
+            fEnergy += fIncre;
+        }
+    }
+    //fTotalEnergyAccumulate = fTotalEnergyAccumulate + fEnergy;
+    EnergyTable[id.xy] = fEnergy;
+}
+
+
+//===========================================================================
+// Summation Kernel
+// smallest is 4 x 4 texture
+// when < 16 x 16, sum directly
+// when > 16 x 16, put it into a 16 x 16 block
+// largest is 4096 x 4096 texture
+//===========================================================================
+
+#pragma kernel reduct4_4
+
+//for texture width = 16
+[numthreads(4, 4, 1)]
+void reduct4_4(uint3 id : SV_DispatchThreadID)
+{
+    float fSum = 0.0f;
+    for (uint ix = id.x * 4; ix < (id.x + 1) * 4; ++ix)
+    {
+        for (uint iy = id.y * 4; iy < (id.y + 1) * 4; ++iy)
+        {
+            fSum += EnergyTable[uint2(ix, iy)];
+        }
+    }
+    EnergyTable[uint2(id.x * 4, id.y * 4)] = fSum;
+}
+
+#pragma kernel reduct8_8
+
+//for texture width = 64
+[numthreads(8, 8, 1)]
+void reduct8_8(uint3 id : SV_DispatchThreadID)
+{
+    float fSum = 0.0f;
+    for (uint ix = id.x * 8; ix < (id.x + 1) * 8; ++ix)
+    {
+        for (uint iy = id.y * 8; iy < (id.y + 1) * 8; ++iy)
+        {
+            fSum += EnergyTable[uint2(ix, iy)];
+        }
+    }
+    EnergyTable[uint2(id.x * 8, id.y * 8)] = fSum;
+}
+
+#pragma kernel reduct16_16
+
+//for texture width = 256
+[numthreads(16, 16, 1)]
+void reduct16_16(uint3 id : SV_DispatchThreadID)
+{
+    float fSum = 0.0f;
+    for (uint ix = id.x * 16; ix < (id.x + 1) * 16; ++ix)
+    {
+        for (uint iy = id.y * 16; iy < (id.y + 1) * 16; ++iy)
+        {
+            fSum += EnergyTable[uint2(ix, iy)];
+        }
+    }
+    EnergyTable[uint2(id.x * 16, id.y * 16)] = fSum;
+}
+
+#pragma kernel reduct32_32
+
+//for texture width > 1024
+[numthreads(32, 32, 1)]
+void reduct32_32(uint3 id : SV_DispatchThreadID)
+{
+    float fSum = 0.0f;
+    for (uint ix = id.x * 32; ix < (id.x + 1) * 32; ++ix)
+    {
+        for (uint iy = id.y * 32; iy < (id.y + 1) * 32; ++iy)
+        {
+            fSum += EnergyTable[uint2(ix, iy)];
+        }
+    }
+    EnergyTable[uint2(id.x * 32, id.y * 32)] = fSum;
+}
+

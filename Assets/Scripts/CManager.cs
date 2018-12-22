@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.IO;
 using SFB;
 using UnityEngine;
@@ -46,6 +44,7 @@ public class CManager : MonoBehaviour
 
     #endregion
 
+    // ReSharper disable once UnusedMember.Local
     void Start()
     {
         Application.runInBackground = true;
@@ -64,6 +63,7 @@ public class CManager : MonoBehaviour
         //r2test.Create();
     }
 
+    // ReSharper disable once UnusedMember.Local
     void Update()
     {
         if (!m_bInitialed)
@@ -85,17 +85,17 @@ public class CManager : MonoBehaviour
     private static int[][] m_iSizes =
     {
         //G4096_4D
-        new int[]{2, 4, 8, 16, 32, 64 },
-        new int[]{1, 2, 3, 4,  5,  6 },
+        new []{2, 4, 8, 16, 32, 64 },
+        new []{1, 2, 3, 4,  5,  6 },
 
-        new int[]{4, 16, 64, 256 },
-        new int[]{2,  4,  6,   8 },
+        new []{4, 16, 64, 256 },
+        new []{2,  4,  6,   8 },
 
         //G4096_3D
-        new int[]{4, 16, 64, 256 },
-        new int[]{2,  4,  6,   8 },
+        new []{4, 16, 64, 256 },
+        new []{2,  4,  6,   8 },
 
-        new int[]{4, 8, 16, 32, 64, 128, 256 },
+        new []{4, 8, 16, 32, 64, 128, 256 },
     };
 
     #endregion
@@ -121,6 +121,7 @@ public class CManager : MonoBehaviour
 
     #region Global
 
+    // ReSharper disable once UnassignedField.Global
     public Dropdown DropGlobalOption;
 
     public void OnDropDownGlobalOptionChanged()
@@ -258,7 +259,7 @@ public class CManager : MonoBehaviour
 
     public void OnBtSiteNumber()
     {
-        int iSiteNumber = 0;
+        int iSiteNumber;
         int.TryParse(SiteNumberInput.text, out iSiteNumber);
         for (int i = 0; i < m_iSizes[(int) m_eCalcType].Length; ++i)
         {
@@ -340,16 +341,14 @@ public class CManager : MonoBehaviour
         if (CycleUseCycle.isOn)
         {
             int iItera, iTargetStep, iSkipStep, iStableStep;
-            float fBetaXFrom, fBetaXTo, fBetaTFrom, fBetaTTo;
+            float fBetaFrom, fBetaTo;
 
             int.TryParse(SimInputIteration.text, out iItera);
             int.TryParse(CycleInputTotalSteps.text, out iTargetStep);
             int.TryParse(CycleInputSkipSteps.text, out iSkipStep);
             int.TryParse(CycleInputStableSteps.text, out iStableStep);
-            float.TryParse(CycleInputBetaXFrom.text, out fBetaXFrom);
-            float.TryParse(CycleInputBetaXFromTo.text, out fBetaXTo);
-            float.TryParse(CycleInputBetaYFrom.text, out fBetaTFrom);
-            float.TryParse(CycleInputBetaYFromTo.text, out fBetaTTo);
+            float.TryParse(CycleInputBetaXFrom.text, out fBetaFrom);
+            float.TryParse(CycleInputBetaXFromTo.text, out fBetaTo);
 
             if (iItera < 1)
             {
@@ -358,18 +357,18 @@ public class CManager : MonoBehaviour
             }
 
             OnStartSimulation();
-            m_pCalcs[(int)m_eCalcType].StartSimulateUsingCycle(new Vector2(fBetaXFrom, fBetaTTo), new Vector2(fBetaTFrom, fBetaTTo), iTargetStep, iSkipStep, iStableStep, iItera);
+            m_pCalcs[(int)m_eCalcType].StartSimulateUsingCycle(new Vector2(fBetaFrom, fBetaTo), iTargetStep, iSkipStep, iStableStep, iItera);
         }
         else
         {
             int iItera, iEnergyStep, iStopStep;
-            float fBetaX, fBetaT;
+            float fBeta;
 
             int.TryParse(SimInputIteration.text, out iItera);
             int.TryParse(SimInputEnergyStep.text, out iEnergyStep);
             int.TryParse(SimInputStopStep.text, out iStopStep);
-            float.TryParse(SimInputBetaX.text, out fBetaX);
-            float.TryParse(SimInputBetaT.text, out fBetaT);
+            //float.TryParse(SimInputBetaX.text, out fBetaX);
+            float.TryParse(SimInputBetaT.text, out fBeta);
 
             if (iItera < 1)
             {
@@ -378,7 +377,7 @@ public class CManager : MonoBehaviour
             }
 
             OnStartSimulation();
-            m_pCalcs[(int)m_eCalcType].StartSimulate(fBetaT, fBetaX, iItera, iEnergyStep, iStopStep);
+            m_pCalcs[(int)m_eCalcType].StartSimulate(fBeta, iItera, iEnergyStep, iStopStep);
         }
     }
 
@@ -486,12 +485,13 @@ public class CManager : MonoBehaviour
 
     #region Log
 
+    // ReSharper disable once UnassignedField.Global
     public Text LogTxArea;
     private const int LogLength = 8192;
 
     public void LogData(string sData)
     {
-        Debug.Log(sData);
+        Debug.Log(string.Format("{0}: {1}", Time.time, sData));
         sData = sData + "\n" + LogTxArea.text;
         sData = sData.Replace("\n\n", "\n");
         if (sData.Length > LogLength)

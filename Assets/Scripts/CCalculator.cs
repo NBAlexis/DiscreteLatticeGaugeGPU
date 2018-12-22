@@ -1,6 +1,7 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.Eventing.Reader;
+using System.Globalization;
 using UnityEngine;
 using UnityEngine.UI;
 using Random = UnityEngine.Random;
@@ -59,9 +60,18 @@ public class CCalculator : MonoBehaviour
     private int m_iKernelCalcUsing = -1;
     private int m_iKernelDispUsing = -1;
     private int m_iKernelEnergyUsing = -1;
+
+    private int m_iKernelSumUsing = -1;
+    private int m_iKernelSum44 = -1;
+    private int m_iKernelSum88 = -1;
+    private int m_iKernelSum1616 = -1;
+    private int m_iKernelSum3232 = -1;
+
     private int m_iCalcDiv = 1;
     private int m_iDispDiv = 1;
     private int m_iEnergyDiv = 1;
+    private int m_iSumSkip = 1;
+    private int m_iSumDiv = 1;
 
     private RenderTexture m_pConfiguration = null;
     private RenderTexture m_pDisplayConfiguration = null;
@@ -104,6 +114,11 @@ public class CCalculator : MonoBehaviour
         m_iKernelEnergy256 = CmpShader.FindKernel("CalculateEnergy256");
         m_iKernelEnergy1024 = CmpShader.FindKernel("CalculateEnergy1024");
 
+        m_iKernelSum44 = CmpShader.FindKernel("reduct4_4");
+        m_iKernelSum88 = CmpShader.FindKernel("reduct8_8");
+        m_iKernelSum1616 = CmpShader.FindKernel("reduct16_16");
+        m_iKernelSum3232 = CmpShader.FindKernel("reduct32_32");
+
         m_pWorkingIntBuffer = new ComputeBuffer(128, 4);
         m_pWorkingIntBuffer.SetData(new uint[128]);
         m_pWorkingFloatBuffer = new ComputeBuffer(128, 4);
@@ -123,7 +138,7 @@ public class CCalculator : MonoBehaviour
         {
             switch (m_eSimType)
             {
-                #region Fixed
+#region Fixed
                 case ESimulateType.Fixed:
                     {
                         CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
@@ -136,6 +151,10 @@ public class CCalculator : MonoBehaviour
                         if ((m_iStep%m_iEnergyStep) != 0)
                         {
                             //accumulate energy and calculate average
+                            if (-1 != m_iKernelSumUsing)
+                            {
+                                CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+                            }
                             CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
                         }
                             
@@ -151,8 +170,13 @@ public class CCalculator : MonoBehaviour
                             CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
 
                             m_pFloatBuffer = new ComputeBuffer(2, 4);
-                            m_pFloatBuffer.SetData(new float[] { 0.0f, 0.0f });
+                            m_pFloatBuffer.SetData(new [] { 0.0f, 0.0f });
                             CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+
+                            if (-1 != m_iKernelSumUsing)
+                            {
+                                CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+                            }
                             CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
                             float[] dataOut = { 0.0f, 0.0f };
                             m_pFloatBuffer.GetData(dataOut);
@@ -186,8 +210,8 @@ public class CCalculator : MonoBehaviour
                                 for (int i = 0; i < m_lstEnergyStepList.Count; ++i)
                                 {
                                     sStp += m_lstEnergyStepList[i].ToString();
-                                    sE += m_lstEnergyList[2 * i].ToString();
-                                    sEav += m_lstEnergyList[2 * i + 1].ToString();
+                                    sE += m_lstEnergyList[2 * i].ToString(CultureInfo.InvariantCulture);
+                                    sEav += m_lstEnergyList[2 * i + 1].ToString(CultureInfo.InvariantCulture);
                                     if (i != m_lstEnergyStepList.Count - 1)
                                     {
                                         sStp += ",";
@@ -202,12 +226,11 @@ public class CCalculator : MonoBehaviour
                                     }
                                 }
 
-                                string sFileName = m_pManager.SaveTextResult(string.Format("Fixed Run at:{0}, with group:{1}\n, size:{7}**4, iteration:{2}, betatx:({3},{4}), stop step:{5}, estep:{6}\n" 
+                                string sFileName = m_pManager.SaveTextResult(string.Format("Fixed Run at:{0}, with group:{1}\n, size:{6}**4, iteration:{2}, beta:{3}, stop step:{4}, estep:{5}\n" 
                                     , DateTime.Now
                                     , m_sGroupName
                                     , m_iIter
-                                    , m_v2Beta.x
-                                    , m_v2Beta.y
+                                    , m_fBeta
                                     , m_iStopStep
                                     , m_iEnergyStep
                                     , m_iSiteNumber[1]) 
@@ -218,9 +241,9 @@ public class CCalculator : MonoBehaviour
                         }
                     }
                     break;
-                #endregion
+#endregion
 
-                #region cycle
+#region cycle
                 case ESimulateType.Cycle:
                     {
                         if (m_iStepNow == m_iSkipStep && 0 == m_iStableTick)
@@ -243,10 +266,15 @@ public class CCalculator : MonoBehaviour
                             //    m_pManager.LogData(string.Format("step:{0} stable", m_iStableStep + 2 - m_iStableTick));
                             //}
                             CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
+                            
                             CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
                             CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
                             CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
                             CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
+                            if (-1 != m_iKernelSumUsing)
+                            {
+                                CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+                            }
                             CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
                             --m_iStableTick;
                             break;
@@ -260,20 +288,21 @@ public class CCalculator : MonoBehaviour
                         //stepnow go from 0,1,...,3490,3491,3492,...,(2*3490)
                         //when stepnow <= 3490, it is 0.01 + (3.49 / 3490) * stepnow
                         //when stepnow > 3490, it is 2*3490 - stepnow.  for example, stepnow = 3491, it is 3490-1, stepnow = 2*3490, it is 0
-                        int iMutipNow = (iStepNow > m_iTargetStep) ? (2 * m_iTargetStep - iStepNow) : iStepNow;
+
+                        //above is give up. we now run for only grow, so iStepNow <= m_iTargetStep
                         if (null != m_txStep)
                         {
-                            m_txStep.text = iMutipNow.ToString();
+                            m_txStep.text = iStepNow.ToString();
                         }
-                        float fCurrentBetaX = m_v3BetaX.x + m_v3BetaX.z * iMutipNow;
-                        float fCurrentBetaT = m_v3BetaT.x + m_v3BetaT.z * iMutipNow;
+                        float fCurrentBetaX = m_v3Beta.x + m_v3Beta.z * iStepNow;
 
-                        CmpShader.SetFloat("fBetaX", fCurrentBetaX);
-                        CmpShader.SetFloat("fBetaT", fCurrentBetaT);
+                        CmpShader.SetFloat("fBeta", fCurrentBetaX);
 
                         CmpShader.SetFloat("fRandomSeed", Random.Range(0.0f, 1.0f));
                         CmpShader.SetInt("iLatticeStartX", Random.Range(0, m_iSiteNumber[2] - 1));
                         CmpShader.SetInt("iLatticeStartY", Random.Range(0, m_iSiteNumber[2] - 1));
+
+                        //Note for L = 16, m_iSiteNumber[0] = 4, m_iSiteNumber[1] = 16, m_iSiteNumber[2] =  256 for 4D(256x256 texture) and 64 for 3D(64x64 texture)
                         CmpShader.Dispatch(m_iKernelCalcUsing, m_iSiteNumber[2] / m_iCalcDiv, m_iSiteNumber[2] / m_iCalcDiv, 1);
                         CmpShader.Dispatch(m_iKernelDispUsing, m_iSiteNumber[2] / m_iDispDiv, m_iSiteNumber[2] / m_iDispDiv, 1);
 
@@ -282,8 +311,12 @@ public class CCalculator : MonoBehaviour
                         {
                             CmpShader.Dispatch(m_iKernelEnergyUsing, m_iSiteNumber[2] / m_iEnergyDiv, m_iSiteNumber[2] / m_iEnergyDiv, 1);
                             m_pFloatBuffer = new ComputeBuffer(2, 4);
-                            m_pFloatBuffer.SetData(new float[] {0.0f, 0.0f});
+                            m_pFloatBuffer.SetData(new [] {0.0f, 0.0f});
                             CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+                            if (-1 != m_iKernelSumUsing)
+                            {
+                                CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+                            }
                             CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
                             float[] dataOut = {0.0f, 0.0f};
                             m_pFloatBuffer.GetData(dataOut);
@@ -311,11 +344,11 @@ public class CCalculator : MonoBehaviour
                         ++m_iStepNow;
                         if (CheckStop())
                         {
-                            return;
+                            //return;
                         }
                     }
                     break;
-                    #endregion
+#endregion
             }
 
         }
@@ -323,83 +356,47 @@ public class CCalculator : MonoBehaviour
 
     private bool CheckStop()
     {
-        if (m_iStepNow > 2 *m_iTargetStep + m_iSkipStep)
+        if (m_iStepNow > m_iTargetStep + m_iSkipStep)
         {
             PauseSimulate();
-            if (m_lstEnergyList.Count == 4 * m_iTargetStep + 2)
+            if (m_lstEnergyList.Count == 2 * m_iTargetStep + 2)
             {
-                string sData = string.Format("Cycle Run at:{0}, group:{1}\n betax={2}:{3}:{4}, betat={5}:{6}:{7}\n iteration={8}, skip={9}, stable={10}, cycle={11}\n Increasing:\n"
+                string sData = string.Format("Cycle Run at:{0}, group:{1}\n beta={2}:{3}:{4}\n iteration={5}, skip={6}, stable={7}, cycle={8}\n Increasing:\n"
                     , DateTime.Now
                     , m_sGroupName
-                    , m_v3BetaX.x
-                    , m_v3BetaX.z
-                    , m_v3BetaX.y
-                    , m_v3BetaT.x
-                    , m_v3BetaT.z
-                    , m_v3BetaT.y
+                    , m_v3Beta.x
+                    , m_v3Beta.z
+                    , m_v3Beta.y
                     , m_iIter
                     , m_iSkipStep
                     , m_iStableStep
                     , m_iTargetStep
                     );
 
-                string sBetaX = "BetaX=\n{";
-                string sBetaT = "BetaT=\n{";
+                string sBeta = "Beta=\n{";
                 string sE = "E=\n{";
                 string sEav = "Eva=\n{";
                 for (int i = 0; i <= m_iTargetStep; ++i)
                 {
                     int imx = (i > m_iTargetStep) ? (2 * m_iTargetStep - i) : i;
 
-                    sBetaX += (m_v3BetaX.x + m_v3BetaX.z * imx).ToString();
-                    sBetaT += (m_v3BetaT.x + m_v3BetaT.z * imx).ToString();
+                    sBeta += (m_v3Beta.x + m_v3Beta.z * imx).ToString();
                     sE += m_lstEnergyList[2 * i].ToString();
                     sEav += m_lstEnergyList[2 * i + 1].ToString();
                     if (i != m_iTargetStep)
                     {
-                        sBetaX += ",";
-                        sBetaT += ",";
+                        sBeta += ",";
                         sE += ",";
                         sEav += ",";
                     }
                     else
                     {
-                        sBetaX += "}\n";
-                        sBetaT += "}\n";
+                        sBeta += "}\n";
                         sE += "}\n";
                         sEav += "}\n";
                     }
                 }
-
-                sData = sData + sBetaX + sBetaT + sE + sEav + "\nDecreasing:\n";
-                sBetaX = "BetaX=\n{";
-                sBetaT = "BetaT=\n{";
-                sE = "E=\n{";
-                sEav = "Eva=\n{";
-                for (int i = m_iTargetStep; i <= 2*m_iTargetStep; ++i)
-                {
-                    int imx = (i > m_iTargetStep) ? (2 * m_iTargetStep - i) : i;
-
-                    sBetaX += (m_v3BetaX.x + m_v3BetaX.z * imx).ToString();
-                    sBetaT += (m_v3BetaT.x + m_v3BetaT.z * imx).ToString();
-                    sE += m_lstEnergyList[2 * i].ToString();
-                    sEav += m_lstEnergyList[2 * i + 1].ToString();
-                    if (i != 2 * m_iTargetStep)
-                    {
-                        sBetaX += ",";
-                        sBetaT += ",";
-                        sE += ",";
-                        sEav += ",";
-                    }
-                    else
-                    {
-                        sBetaX += "}\n";
-                        sBetaT += "}\n";
-                        sE += "}\n";
-                        sEav += "}\n";
-                    }
-                }
-                sData = sData + sBetaX + sBetaT + sE + sEav;
+                sData = sData + sBeta + sE + sEav;
 
                 if (null != m_pManager)
                 {
@@ -412,7 +409,7 @@ public class CCalculator : MonoBehaviour
             {
                 if (null != m_pManager)
                 {
-                    CManager.ShowMessage("Data Count Not Correct !");
+                    CManager.ShowMessage("Data Count Not Correct ! n = " + m_lstEnergyList.Count);
                     m_pManager.LogData("Stopped");
                 }
             }
@@ -461,7 +458,7 @@ public class CCalculator : MonoBehaviour
 
         switch (CalcType)
         {
-            #region G40964D
+#region G40964D
             case ECalc.G4096_4D:
                 {
                     if (1 == iSiteNumber[0])
@@ -472,6 +469,10 @@ public class CCalculator : MonoBehaviour
                         m_iDispDiv = 4;
                         m_iKernelEnergyUsing = m_iKernelEnergy16;
                         m_iEnergyDiv = 4;
+
+                        m_iSumSkip = 1;
+                        m_iSumDiv = 1;
+                        m_iKernelSumUsing = -1;
                     }
                     else
                     {
@@ -486,6 +487,11 @@ public class CCalculator : MonoBehaviour
 
                             m_iKernelEnergyUsing = m_iKernelEnergy256;
                             m_iEnergyDiv = 16;
+
+                            //sum 16 x 16 texture
+                            m_iKernelSumUsing = m_iKernelSum44;
+                            m_iSumSkip = 4;
+                            m_iSumDiv = 16;
                         }
                         else
                         {
@@ -494,24 +500,49 @@ public class CCalculator : MonoBehaviour
 
                             m_iKernelEnergyUsing = m_iKernelEnergy1024;
                             m_iEnergyDiv = 32;
+
+                            if (3 == iSiteNumber[0]) //8x8x8x8 64 x 64 texture
+                            {
+                                m_iKernelSumUsing = m_iKernelSum88;
+                                m_iSumSkip = 8;
+                                m_iSumDiv = 64;
+                            }
+                            else if (4 == iSiteNumber[0]) //16x16x16x16 256 x 256 texture
+                            {
+                                m_iKernelSumUsing = m_iKernelSum1616;
+                                m_iSumSkip = 16;
+                                m_iSumDiv = 256;
+                            }
+                            else
+                            {
+                                m_iKernelSumUsing = m_iKernelSum3232;
+                                m_iSumSkip = 32;
+                                m_iSumDiv = 1024;
+                            }
                         }
                     }
 
                     CmpShader.SetBuffer(m_iKernelCalcUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
                     CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
-                    CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+                    //CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+                    if (-1 != m_iKernelSumUsing)
+                    {
+                        CmpShader.SetBuffer(m_iKernelSumUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+                    }
 
                     CmpShader.SetInt("iSiteShift", iSiteNumber[0]);
-                    CmpShader.SetInt("iPlaqNumber", 12*iSiteNumber[1]*iSiteNumber[1]*iSiteNumber[1]*iSiteNumber[1]);
+                    CmpShader.SetInt("iSumSkip", m_iSumSkip);
+                    //6 = D(D-1)/2
+                    CmpShader.SetInt("iPlaqNumber", 6*iSiteNumber[1]*iSiteNumber[1]*iSiteNumber[1]*iSiteNumber[1]);
                     m_iSiteNumber[2] = iSiteNumber[1] * iSiteNumber[1];
 
                     CmpShader.Dispatch(m_iKernelGenerateConstants, 1, 1, 1);
                     SetWhiteConfigure();
                 }
                 break;
-            #endregion
+#endregion
 
-            #region G40963D
+#region G40963D
             case ECalc.G4096_3D:
                 {
                     //4x4x4
@@ -523,30 +554,72 @@ public class CCalculator : MonoBehaviour
                         m_iDispDiv = 8;
                         m_iKernelEnergyUsing = m_iKernelEnergy16;
                         m_iEnergyDiv = 8;
+
+                        //8 x 8 texture
+                        m_iSumSkip = 1;
+                        m_iSumDiv = 1;
+                        m_iKernelSumUsing = -1;
                     }
-                    else
+                    else //>= 16 x 16 x 16, using 1024
                     {
-                        m_iKernelCalcUsing = m_iKernelCalculate256;
+                        m_iKernelCalcUsing = m_iKernelCalculate256; //largest is 256
                         m_iCalcDiv = 16;
-                        m_iKernelEnergyUsing = m_iKernelEnergy256;
-                        m_iEnergyDiv = 16;
-                        m_iKernelEnergyUsing = m_iKernelDisplay256;
-                        m_iEnergyDiv = 16;
+                        m_iKernelDispUsing = m_iKernelDisplay1024;
+                        m_iDispDiv = 32;
+                        m_iKernelEnergyUsing = m_iKernelEnergy1024;
+                        m_iEnergyDiv = 32;
+
+                        if (4 == iSiteNumber[0]) //64 X 64 texture
+                        {
+                            m_iKernelSumUsing = m_iKernelSum88;
+                            m_iSumSkip = 8;
+                            m_iSumDiv = 64;
+                            if ((1 << (iSiteNumber[0] + (iSiteNumber[0] >> 1))) < 64)
+                            {
+                                Debug.LogError("?????1");
+                            }
+                        }
+                        else if (6 == iSiteNumber[0]) //512 X 512 texture
+                        {
+                            m_iKernelSumUsing = m_iKernelSum1616;
+                            m_iSumSkip = 16;
+                            m_iSumDiv = 256;
+                            if ((1 << (iSiteNumber[0] + (iSiteNumber[0] >> 1))) < 256)
+                            {
+                                Debug.LogError("?????1");
+                            }
+                        }
+                        else //at least 2048 x 2048 texture
+                        {
+                            m_iKernelSumUsing = m_iKernelSum3232;
+                            m_iSumSkip = 32;
+                            m_iSumDiv = 1024;
+                            if ((1 << (iSiteNumber[0] + (iSiteNumber[0] >> 1))) < 1024)
+                            {
+                                Debug.LogError("?????1");
+                            }
+                        }
                     }
 
                     CmpShader.SetBuffer(m_iKernelCalcUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
                     CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingIntDataBuffer", m_pWorkingIntBuffer);
                     CmpShader.SetBuffer(m_iKernelEnergyUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
 
+                    if (-1 != m_iKernelSumUsing)
+                    {
+                        CmpShader.SetBuffer(m_iKernelSumUsing, "WorkingFloatDataBuffer", m_pWorkingFloatBuffer);
+                    }
                     CmpShader.SetInt("iSiteShift", iSiteNumber[0]);
-                    CmpShader.SetInt("iPlaqNumber", 6 * iSiteNumber[1] * iSiteNumber[1] * iSiteNumber[1]);
+                    //D(D-1)/2
+                    CmpShader.SetInt("iPlaqNumber", 3 * iSiteNumber[1] * iSiteNumber[1] * iSiteNumber[1]);
                     m_iSiteNumber[2] = 1 << (iSiteNumber[0] + (iSiteNumber[0] >> 1));
-
+                    //Debug.Log(string.Format("site number [2] = {0}", m_iSiteNumber[2]));
                     CmpShader.Dispatch(m_iKernelGenerateConstants, 1, 1, 1);
+                    CmpShader.SetInt("iSumSkip", m_iSumSkip);
                     SetWhiteConfigure();
                 }
                 break;
-                #endregion
+#endregion
         }
     }
 
@@ -585,6 +658,7 @@ public class CCalculator : MonoBehaviour
         CmpShader.SetInt("iM", gt.m_iM);
         CmpShader.SetInt("iN", gt.m_iN);
         CmpShader.SetInt("iIG", gt.m_IG.Length);
+        //Debug.Log(string.Format("im = {0}, in = {1}, ig = {2}", gt.m_iM, gt.m_iN, gt.m_IG.Length));
 
         int[] iMTTextureSize = CUtility.GetUpperTwoExp(gt.m_iM + gt.m_iN - 1);
         int[] iEITextureSize = CUtility.GetUpperTwoExp(gt.m_iM);
@@ -644,7 +718,7 @@ public class CCalculator : MonoBehaviour
                     m_pDisplayConfiguration = new RenderTexture(m_iSiteNumber[2], m_iSiteNumber[2], 1, RenderTextureFormat.ARGB32);
                     m_pDisplayConfiguration.enableRandomWrite = true;
                     m_pDisplayConfiguration.Create();
-                    m_pEnergyTable = new RenderTexture(m_iSiteNumber[2], m_iSiteNumber[2], 1, RenderTextureFormat.RGFloat);
+                    m_pEnergyTable = new RenderTexture(m_iSiteNumber[2], m_iSiteNumber[2], 1, RenderTextureFormat.RFloat);
                     m_pEnergyTable.enableRandomWrite = true;
                     m_pEnergyTable.Create();
 
@@ -657,6 +731,12 @@ public class CCalculator : MonoBehaviour
 
                     CmpShader.SetTexture(m_iKernelEnergyUsing, "Configuration", m_pConfiguration);
                     CmpShader.SetTexture(m_iKernelEnergyUsing, "EnergyTable", m_pEnergyTable);
+
+                    if (-1 != m_iKernelSumUsing)
+                    {
+                        CmpShader.SetTexture(m_iKernelSumUsing, "EnergyTable", m_pEnergyTable);
+                    }
+
                     CmpShader.SetTexture(m_iKernelGetEnergyOut, "EnergyTable", m_pEnergyTable);
 
                     CmpShader.Dispatch(m_iKernelInitialWhiteConfiguration, m_iSiteNumber[2] / 4, m_iSiteNumber[2] / 4, 1);
@@ -720,15 +800,19 @@ public class CCalculator : MonoBehaviour
         m_lstEnergyStepList.Clear();
 
         m_pFloatBuffer = new ComputeBuffer(2, 4);
-        m_pFloatBuffer.SetData(new float[] { 0.0f, 0.0f });
+        m_pFloatBuffer.SetData(new [] { 0.0f, 0.0f });
         CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+        if (-1 != m_iKernelSumUsing)
+        {
+            CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+        }
         CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
         m_pFloatBuffer.Release();
     }
 
     private int m_iIter = 1;
-    private Vector2 m_v2Beta = Vector2.zero;
-    public void StartSimulate(float fBetaT, float fBetaX, int iItera, int iEnergyStep, int iStopStep)
+    private float m_fBeta = 0.0f;
+    public void StartSimulate(float fBeta, int iItera, int iEnergyStep, int iStopStep)
     {
         if (m_bSimulating)
         {
@@ -738,18 +822,21 @@ public class CCalculator : MonoBehaviour
         m_iEnergyStep = iEnergyStep;
         m_iStopStep = iStopStep;
         m_iIter = iItera;
-        m_v2Beta = new Vector2(fBetaT, fBetaX);
+        m_fBeta = fBeta;
         CmpShader.SetInt("iIteration", iItera);
-        CmpShader.SetFloat("fBetaX", fBetaX);
-        CmpShader.SetFloat("fBetaT", fBetaT);
+        CmpShader.SetFloat("fBeta", fBeta);
 
         m_bSimulating = true;
 
         if (0 == m_iStep)
         {
             m_pFloatBuffer = new ComputeBuffer(2, 4);
-            m_pFloatBuffer.SetData(new float[] { 0.0f, 0.0f });
+            m_pFloatBuffer.SetData(new [] { 0.0f, 0.0f });
             CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+            if (-1 != m_iKernelSumUsing)
+            {
+                CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+            }
             CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
             m_pFloatBuffer.Release();
         }
@@ -760,8 +847,7 @@ public class CCalculator : MonoBehaviour
         }
     }
 
-    private Vector3 m_v3BetaX = Vector3.zero;
-    private Vector3 m_v3BetaT = Vector3.zero;
+    private Vector3 m_v3Beta = Vector3.zero;
     private int m_iTargetStep = -1;
     private int m_iStepNow = 0;
     private int m_iSkipStep = 0;
@@ -775,7 +861,7 @@ public class CCalculator : MonoBehaviour
         return m_iTargetStep > 1 && (m_iStepNow <= 2 * m_iTargetStep + m_iSkipStep);
     }
 
-    public void StartSimulateUsingCycle(Vector2 vBetaX, Vector2 vBetaT, int iTotalStep, int iSkip, int iStable, int iItera)
+    public void StartSimulateUsingCycle(Vector2 vBeta, int iTotalStep, int iSkip, int iStable, int iItera)
     {
         if (m_iTargetStep > 1)
         {
@@ -806,14 +892,17 @@ public class CCalculator : MonoBehaviour
         m_iStableTick = 0;
         m_iIter = iItera;
         CmpShader.SetInt("iIteration", iItera);
-        m_v3BetaX = new Vector3(vBetaX.x, vBetaX.y, (vBetaX.y - vBetaX.x) / iTotalStep);
-        m_v3BetaT = new Vector3(vBetaT.x, vBetaT.y, (vBetaT.y - vBetaT.x) / iTotalStep);
+        m_v3Beta = new Vector3(vBeta.x, vBeta.y, (vBeta.y - vBeta.x) / iTotalStep);
         m_lstEnergyList.Clear();
         CmpShader.Dispatch(m_iKernelResetEnergyHistory, 1, 1, 1);
 
         m_pFloatBuffer = new ComputeBuffer(2, 4);
-        m_pFloatBuffer.SetData(new float[] { 0.0f, 0.0f });
+        m_pFloatBuffer.SetData(new [] { 0.0f, 0.0f });
         CmpShader.SetBuffer(m_iKernelGetEnergyOut, "FloatDataBuffer", m_pFloatBuffer);
+        if (-1 != m_iKernelSumUsing)
+        {
+            CmpShader.Dispatch(m_iKernelSumUsing, m_iSiteNumber[2] / m_iSumDiv, m_iSiteNumber[2] / m_iSumDiv, 1);
+        }
         CmpShader.Dispatch(m_iKernelGetEnergyOut, 1, 1, 1);
         m_pFloatBuffer.Release();
 

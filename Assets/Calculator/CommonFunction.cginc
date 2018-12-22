@@ -24,6 +24,12 @@ inline int GetGvalueG4096_4D(RWTexture2D<int2> conf, uint2 site, uint dir)
 
 //-------------------------------------
 //L site index to uint2 site index
+//for site shift = 4, siteMask = 1111
+//x = L >> (3 * (isitefhift + 1)) & siteMask
+//y = L >> (2 * (isitefhift + 1)) & siteMask
+//z = L >> (1 * (isitefhift + 1)) & siteMask
+//t = L >> (0 * (isitefhift + 1)) & siteMask
+//return = (x << site_shift + y, z << site_shit, t)
 //-------------------------------------
 inline uint2 GetSiteIndexG4096_4D(uint L, uint isitefhift, uint siteMask)
 {
@@ -34,14 +40,22 @@ inline uint2 GetSiteIndexG4096_4D(uint L, uint isitefhift, uint siteMask)
                 );
 }
 
-inline uint2 GetSiteIndexG4096_3D(uint L, uint isitefhift, uint siteMask, uint halfmaskup, uint halfmaskdown)
+//-------------------------------------
+// uint2 = Texture coordinate
+// x,y,z = lattice coordinate, same as above
+// for z = 1001
+// we store it at X = x + (01) << 4, Y = y + (10) << 4.
+// X = x + (1001 & 0011) << 4
+// Y = y + (1001 & 1100) << 2
+//-------------------------------------
+inline uint2 GetSiteIndexG4096_3D(uint L, uint isitefhift, uint siteMask, uint halfmaskup, uint halfmaskdown, uint halfshift)
 {
     uint x = (L >> (2 * (isitefhift + 1))) & siteMask;
     uint y = (L >> (isitefhift + 1)) & siteMask;
     uint z = L & siteMask;
 
     //z have upper part in y, and lower part in x
-    return uint2(x + (z & halfmaskdown) << isitefhift, x + (z & halfmaskup) << isitefhift);
+    return uint2(x + (z & halfmaskdown) << isitefhift, y + (z & halfmaskup) << halfshift);
 }
 
 //-------------------------------------
@@ -88,32 +102,32 @@ inline uint3 GetBackwardPlaquette4D(uint4 fs, uint4 bs, uint plaquttedir, uint b
 {
     uint Lprime3 = (bs[plaquttedir] + L);
     uint Lprime4 = (bs[plaquttedir] + fs[bounddir] + L);
-    uint gb2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime4, isitefhift, _mask2), plaquttedir);
-    uint gc2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), bounddir);
-    uint gd2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), plaquttedir);
+    uint gb2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_4D(Lprime4, isitefhift, _mask2), plaquttedir);
+    uint gc2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), bounddir);
+    uint gd2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_4D(Lprime3, isitefhift, _mask2), plaquttedir);
     return uint3(gc2, gb2, iM + iN - 2 - gd2);
 }
 
 //==================
 //The version for 3D
-inline uint3 GetForwardPlaquette3D(uint4 fs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown)
+inline uint3 GetForwardPlaquette3D(uint4 fs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown, uint halfshift)
 {
     uint Lprime1 = (fs[plaquttedir] + L);
     uint Lprime2 = (fs[bounddir] + L);
 
-    uint gb1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime2, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
-    uint gc1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime1, isitefhift, _mask2, halfmaskup, halfmaskdown), bounddir);
-    uint gd1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(L, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
+    uint gb1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime2, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), plaquttedir);
+    uint gc1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime1, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), bounddir);
+    uint gd1 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(L, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), plaquttedir);
     return uint3(gb1, iM + iN - 2 - gc1, iM + iN - 2 - gd1);
 }
 
-inline uint3 GetBackwardPlaquette3D(uint4 fs, uint4 bs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown)
+inline uint3 GetBackwardPlaquette3D(uint4 fs, uint4 bs, uint plaquttedir, uint bounddir, uint L, uint isitefhift, uint _mask2, RWTexture2D<int2> conf, uint iM, uint iN, uint halfmaskup, uint halfmaskdown, uint halfshift)
 {
     uint Lprime3 = (bs[plaquttedir] + L);
     uint Lprime4 = (bs[plaquttedir] + fs[bounddir] + L);
-    uint gb2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime4, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
-    uint gc2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown), bounddir);
-    uint gd2 = GetGvalueG4096_4D(Configuration, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown), plaquttedir);
+    uint gb2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime4, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), plaquttedir);
+    uint gc2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), bounddir);
+    uint gd2 = GetGvalueG4096_4D(conf, GetSiteIndexG4096_3D(Lprime3, isitefhift, _mask2, halfmaskup, halfmaskdown, halfshift), plaquttedir);
     return uint3(gc2, gb2, iM + iN - 2 - gd2);
 }
 
@@ -185,9 +199,10 @@ inline float gold_noise(uint2 coordinate, float seed)
 
 //x = id.x & mask2
 //y = id.y & mask2
-//z = id.x & mask4 >> iSiteShift + id.y & mask4 >> (iSiteShift + iHalfSiteShift)
+//for Z lower part in x, higher part in y, when x = 11 0101, y = 01 1001, z = 0111 = (y & 110000) >> 2 + (x & 110000) >> 4.
+//z = id.x & mask4 >> iSiteShift + id.y & mask4 >> iHalfSiteShift
 //L = x << (iSiteShift + 1) * 2 + y << (iSiteShift + 1) + z
 #define id_to_Lsite_3d (id.x & mask2) << (2 * iSiteShift + 2) \
                      + (id.y & mask2) << (iSiteShift + 1) \
-                     + (id.x & mask4) >> iSiteShift + (id.y & mask4) >> (iSiteShift + iHalfSiteShift)
+                     + (id.x & mask4) >> iSiteShift + (id.y & mask4) >> iHalfSiteShift
 
